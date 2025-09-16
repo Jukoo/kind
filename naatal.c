@@ -34,7 +34,7 @@
 #define _NATAAL_WARNING_MESG  "A utility to reveal real type of command \012"
 
 #define  BINARY_TYPE  (1 << 0)  
-#define  BINARY_STR  "binary" 
+#define  BINARY_STR   "binary" 
 #define  BUILTIN_TYPE (1 << 1)
 #define  BUILTIN_STR  "builtin" 
 #define  ALIAS_TYPE   (1 << 2)
@@ -43,7 +43,7 @@
 #define  TYPE_STR(__type) \
    __type##_STR
 
-#define  ELF_SIG   0x4c457f46 //  (0x7f<<8|'E'<<16|'L'<<24|'F')  
+#define  ELF_SIG   0x4c457f46  
 #define  MA_ALIAS  0x61696c6173  
 #define perr_r(__fname , ...)\
   EXIT_FAILURE;do{perror(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)  
@@ -63,6 +63,7 @@ char  bashrcs_sources[][20] = {
 #define  ALIAS_STRLEN  0x64  
 /** Contiendra toutes les aliase definit*/ 
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
+char *has_alias = (char *)00  ; 
 
 /**
  * @brief ceci  contient les information sur la command  
@@ -215,7 +216,6 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
 
             /*Charge les  aliases  a partir  de l'offset */
             memcpy(*(bashrc_list+offset), inline_buffer , strlen(inline_buffer));
-            printf("->>>  %s :: %s \n" ,  __func__  , (bashrc_list+offset)); 
             offset=-~offset ;  
           }
 
@@ -232,19 +232,27 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
 }
 void brief(struct nataal_info_t *  cmd_info) 
 {
-   char  typestr[0x14] ={0} ;  
+   char  typestr[0x32] ={0};   
    fprintf(stdout ,  "command\t: %s\n", cmd_info->_cmd);
    if (!cmd_info->_path  && !cmd_info->_type )   return ; 
 
-   if(cmd_info->_type & BINARY_TYPE)   strcat(typestr ,  TYPE_STR(BINARY)) ; 
-   if (cmd_info->_type & ALIAS_TYPE)   strcat(typestr ,  TYPE_STR(ALIAS)) ; 
-   if (cmd_info->_type & BUILTIN_TYPE)  strcat(typestr ,  TYPE_STR(BUILTIN)) ; 
+#define  _Append(__typestr ,__str )({\
+    size_t s  = strlen(__typestr) ;\
+    strcat((__typestr+s), __str) ; \
+    *(__typestr+(strlen(__typestr))) = 0x20;  \
+    })
+
+   if (cmd_info->_type & BINARY_TYPE)  _Append(typestr, TYPE_STR(BINARY)) ; 
+   if (cmd_info->_type & ALIAS_TYPE)   _Append(typestr, TYPE_STR(ALIAS)) ; 
+   if (cmd_info->_type & BUILTIN_TYPE) _Append(typestr, TYPE_STR(BUILTIN)) ; 
   
    if ((cmd_info->_type ^ BUILTIN_TYPE)) //!builtin type has no location  
      fprintf(stdout , "Location: %s\n",cmd_info->_path); 
 
-   
-   fprintf(stdout , "Type\t: %s\n", typestr) ; 
+   fprintf(stdout , "Type\t: [ %s]\n", typestr) ; 
+
+   if (has_alias)  
+     fprintf(stdout , "Alias\t: %s", has_alias)  ; 
 }
 
 struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int search_option)
@@ -254,13 +262,12 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
     return (struct nataal_info_t*) 0 ; 
 
   local_info->_cmd = (char *) cmd_target ; 
-
   unsigned   data = (search_option  &  0xff ) ; 
   search_option  >>=8 ;  
+  
   if (search_option & ALIAS_TYPE)  
   {  
-    puts("alias search") ; 
-    (void *)looking_for_aliases(local_info, data ) ; 
+    has_alias =  looking_for_aliases(local_info, data ) ; 
   }
   if (search_option & BINARY_TYPE )
     (void *)search_in_sysbin(local_info);  
@@ -332,14 +339,20 @@ static int looking_for_elf_signature(const char * location)
 static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata ) 
 {
   int starting_offset =  (mtadata & 0xff) , 
-      naliases = (mtadata >> 8 ); 
-  
-  int  i=~0;  
+      naliases = (mtadata >> 8 );  
+
   while(00 != *(*(bash_aliases+(starting_offset))))   
   {
-    char  * alias  = *(bash_aliases+(starting_offset)) ; 
+    char  * alias  = *(bash_aliases+(starting_offset)) ;
+    if(strstr(alias  , cmd_info->_cmd))   
+    {
+      cmd_info->_type  |= ALIAS_TYPE ;   
+      return    *(bash_aliases+(starting_offset)) ; 
+    }
     starting_offset=-~starting_offset ; 
 
   }
+
+  return (char *) 00 ; 
 
 }
