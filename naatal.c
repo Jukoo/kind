@@ -3,7 +3,9 @@
  * @brief “Naatal lu fi nekk.”
  *         Revele le nature d'une commande 
  * @author Umar Ba <jUmarB@protonmail.com>  
- * @warning :  Ce programme est compatible avec bash pour le moment  
+ * @warning :  Ce programme est compatible avec bash pour le moment 
+ *             - je ne connais pas le comportement exacte  avec les autres shell (csh , fish , nu, elvish ...)
+ * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation
  */
 
 #include <stdio.h> 
@@ -12,26 +14,56 @@
 #include <string.h>
 #include <unistd.h> 
 #include <assert.h> 
+#include <errno.h> 
+#include <pwd.h> 
+#include <fcntl.h> 
+#include <sys/types.h> 
+#include <sys/wait.h> 
+#include <sys/stat.h> 
+#include <sys/cdefs.h> 
 
+#if __has_attribute(warn_unused_result) 
+# define __must_use  __attribute__((warn_unused_result)) 
+#else  
+# define __must_use /*  Nothing */ 
+#endif 
+
+#define _Nullable  
+#define _Nonnulable  [static 01]  
 
 #define _NATAAL_WARNING_MESG  "A utility to reveal real type of command \012"
 
 #define  BINARY_TYPE  (1 << 0)  
-#define  BINARY_STR  " binary " 
+#define  BINARY_STR  "binary" 
 #define  BUILTIN_TYPE (1 << 1)
-#define  BUILTIN_STR  " builtin " 
+#define  BUILTIN_STR  "builtin" 
 #define  ALIAS_TYPE   (1 << 2)
-#define  ALIAS_STR  " alias " 
+#define  ALIAS_STR    "alias" 
 
 #define  TYPE_STR(__type) \
    __type##_STR
 
-#define  ELF_SIG  (0x7f<<8|'E'<<16|'L'<<24|'F')  
-
+#define  ELF_SIG   0x4c457f46 //  (0x7f<<8|'E'<<16|'L'<<24|'F')  
+#define  MA_ALIAS  0x61696c6173  
 #define perr_r(__fname , ...)\
   EXIT_FAILURE;do{perror(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)  
 
+#define  BASHRCS \
+  "/home/%s/.bashrc",\
+  "/etc/bash/bashrc"  /**Vous pouvez ajouter d'autre  sources*/ 
+
+static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE ; 
 typedef  uint16_t pstat_t  ;  
+char  bashrcs_sources[][20] = {
+  BASHRCS,
+  '\000'
+}; 
+
+#define  ALIAS_MAX_ROW 0xa 
+#define  ALIAS_STRLEN  0x64  
+/** Contiendra toutes les aliase definit*/ 
+char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
+
 /**
  * @brief ceci  contient les information sur la command  
  * _cmd : represente la command elle meme 
@@ -47,9 +79,21 @@ struct nataal_info_t
     } ; 
 } ; 
 void brief(struct nataal_info_t  *cmd_info) ; 
-struct  nataal_info_t*  make_effective_search(const char * cmd_tgt) ;  
+struct  nataal_info_t*  make_effective_search(const char * cmd_tgt , int search_option) ;  
 static char *search_in_sysbin(struct   nataal_info_t  *  cmd_info) ; 
-static int looking_for_elf_signature(const char *cmd_location) ;
+static int looking_for_elf_signature(const char *cmd_location) ;  
+
+/** Pre-Chargement des alias ... */
+int  __preload_all_aliases(char * _Nullable directive) __must_use;
+/*
+ * @brief  detecte alias key word from bashrc sources   
+ * */
+static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t  /* Read only */) ;
+
+
+static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata);  
+
+static char  is_builtin(const char*  cmd) ;  
 
 void release(int rc , void *args) 
 {
@@ -68,17 +112,25 @@ void release(int rc , void *args)
 int main (int ac , char **av,  char **env) 
 {
   pstat_t pstatus =EXIT_SUCCESS;
-  (void) setvbuf(stdout , (char *)0 , _IONBF , 0) ;  
+  (void) setvbuf(stdout , (char *)0 , _IONBF , 0) ; 
   
   if (!(ac &~(1))) 
   {
     pstatus^=perr_r(nataal ,_NATAAL_WARNING_MESG); 
     goto __eplg; 
   }
-  
   char *target_command = (char *) *(av+(ac+~0)); 
+  int summary_stat = __preload_all_aliases(target_command); 
+  if( 0 >= (summary_stat >>  8) )  
+   option_search&=~ALIAS_TYPE ;  /*disable  alias searching */
   
-  struct nataal_info_t*  info =  make_effective_search(target_command) ;
+  /*
+   * Franchement j'ai la flemme  de creer d'autre variables 
+   * ou de changer ma signature de fonction ... bref autant tout compacter 
+   */ 
+    option_search = (option_search << 8 ) |  summary_stat  ; 
+
+  struct nataal_info_t*  info =  make_effective_search(target_command ,  option_search) ;
   if(!info) 
   {
     pstatus^=perr_r(make_effective_search ,  "No able to retrieve information  from this command %s\012",  target_command); 
@@ -93,6 +145,91 @@ __eplg:
   return pstatus ;
 }
 
+int  __preload_all_aliases(char * directive)  
+{
+  /**See if it's a regular user  */ 
+  int  authorized_uid = 0x3e8 ;  
+  
+  char *current_user_session = getenv("USER") ; 
+  if(!current_user_session) 
+    return ~0 ;   
+ 
+  struct passwd *user  = getpwnam(current_user_session);
+  if(!user) 
+    return ~0 ; 
+  
+  if(authorized_uid  >   user->pw_uid )
+  {
+    /** Ici je n'autorise pas  les utilisateur standard et root */  
+    /**TODO: specifier un code d'erreur  plus approprier */
+    return    ~0;  
+  }
+  
+  /**On charge les fichier source  des bashrcs*/ 
+  char user_bashrc[0x32] = {0} ;
+  sprintf(user_bashrc , *(bashrcs_sources) ,  current_user_session) ;  
+
+  //!TODO: mettre ca dans une function 
+  off_t offset_index= ~0;  
+  while(  00 != *(*(bashrcs_sources+ (++offset_index))) )    
+  { 
+     if (0 == offset_index) 
+     {
+       memcpy((bash_aliases+offset_index)  , user_bashrc  , strlen(user_bashrc));  
+       continue ; 
+     } 
+     memcpy(*(bash_aliases+offset_index)  ,  *(bashrcs_sources+offset_index),
+         strlen(*(bashrcs_sources+offset_index))) ; 
+  } 
+
+  return load_alias_from(bash_aliases , offset_index) ;
+ 
+
+}
+
+/*TODO: make aliases persistant (use tmpfile or something ) 
+ *      That hold  the values without re-reading the files
+ *- For Later: **/
+static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t starting_offset) 
+{
+  int offset = starting_offset , 
+      naliases = 0 ; 
+
+  while(naliases < starting_offset) 
+  {
+     while( 00 !=  *(*(bashrc_list + naliases ))) 
+     {
+       const char  *bashsrc= *(bashrc_list+naliases) ; 
+       FILE *fp = fopen(bashsrc , "r") ;  
+       if(!fp) 
+         return  errno;   
+       char inline_buffer[1024] ={0} ; 
+       while((fgets(inline_buffer, 1024 ,  fp)))  
+       { 
+          //! Voir si la ligne commence avec le mot 'alias' 
+          if(strstr(inline_buffer, ALIAS_STR ) && ( 
+                !((*inline_buffer & 0xff) ^ 0x61)) && 
+                !((*(inline_buffer+4) & 0xff ^0x73))
+            )
+          {
+
+            /*Charge les  aliases  a partir  de l'offset */
+            memcpy(*(bashrc_list+offset), inline_buffer , strlen(inline_buffer));
+            printf("->>>  %s :: %s \n" ,  __func__  , (bashrc_list+offset)); 
+            offset=-~offset ;  
+          }
+
+          bzero(inline_buffer , 1024) ;  
+       }
+       
+       fclose(fp) ; 
+       break ; 
+     }
+
+     naliases=-~naliases ; 
+  } 
+  return (naliases  << 8 | starting_offset) ; 
+}
 void brief(struct nataal_info_t *  cmd_info) 
 {
    char  typestr[0x14] ={0} ;  
@@ -110,15 +247,28 @@ void brief(struct nataal_info_t *  cmd_info)
    fprintf(stdout , "Type\t: %s\n", typestr) ; 
 }
 
-struct nataal_info_t *  make_effective_search(const char *  cmd_target)
+struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int search_option)
 {
   struct nataal_info_t * local_info = (struct nataal_info_t*) malloc(sizeof(*local_info))  ; 
   if (!local_info) 
     return (struct nataal_info_t*) 0 ; 
 
   local_info->_cmd = (char *) cmd_target ; 
-  (void *)search_in_sysbin(local_info);  
+
+  unsigned   data = (search_option  &  0xff ) ; 
+  search_option  >>=8 ;  
+  if (search_option & ALIAS_TYPE)  
+  {  
+    puts("alias search") ; 
+    (void *)looking_for_aliases(local_info, data ) ; 
+  }
+  if (search_option & BINARY_TYPE )
+    (void *)search_in_sysbin(local_info);  
   
+  if(search_option  &  BUILTIN_TYPE) 
+  {
+    /** TODO : how to detect  if is a builtin command*/ 
+  }
   return local_info ; 
 }
 
@@ -175,4 +325,21 @@ static int looking_for_elf_signature(const char * location)
   
 
   return    !(elf_check^ELF_SIG) ? BINARY_TYPE  : 0; 
+}
+
+
+
+static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata ) 
+{
+  int starting_offset =  (mtadata & 0xff) , 
+      naliases = (mtadata >> 8 ); 
+  
+  int  i=~0;  
+  while(00 != *(*(bash_aliases+(starting_offset))))   
+  {
+    char  * alias  = *(bash_aliases+(starting_offset)) ; 
+    starting_offset=-~starting_offset ; 
+
+  }
+
 }
