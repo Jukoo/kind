@@ -39,12 +39,22 @@
 #define  BUILTIN_STR  "builtin" 
 #define  ALIAS_TYPE   (1 << 2)
 #define  ALIAS_STR    "alias" 
+#define  SHELL_KW_TYPE (1<< 3) 
+#define  SHELL_KW_STR  "Shell keyword" 
 
 #define  TYPE_STR(__type) \
    __type##_STR
 
+#define  BASH_SIG  0x73616268 
 #define  ELF_SIG   0x4c457f46  
-#define  MA_ALIAS  0x61696c6173  
+#define  MA_ALIAS  0x61696c6173 
+
+#define  SIGMATCH(signature, strmatch ,lsize) ({\
+    int s =  (lsize >>8 );\
+    while(s <=(lsize &0xff))\
+      signature&=~*(strmatch+ (s-1)) << (8*s),s=-~s;\
+    })
+
 #define perr_r(__fname , ...)\
   EXIT_FAILURE;do{perror(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)  
 
@@ -52,7 +62,7 @@
   "/home/%s/.bashrc",\
   "/etc/bash/bashrc"  /**Vous pouvez ajouter d'autre  sources*/ 
 
-static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE ; 
+static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
 typedef  uint16_t pstat_t  ;  
 char  bashrcs_sources[][20] = {
   BASHRCS,
@@ -109,11 +119,15 @@ void release(int rc , void *args)
    info = 0  ; 
 }
 
+static void check_compatibility_environment(void) ;   
  
 int main (int ac , char **av,  char **env) 
 {
   pstat_t pstatus =EXIT_SUCCESS;
   (void) setvbuf(stdout , (char *)0 , _IONBF , 0) ; 
+  
+  /* Pour le moment le programme est compatible  avec bash les autres  peut etre dans un future proche */ 
+  check_compatibility_environment() ;  
   
   if (!(ac &~(1))) 
   {
@@ -134,7 +148,7 @@ int main (int ac , char **av,  char **env)
   struct nataal_info_t*  info =  make_effective_search(target_command ,  option_search) ;
   if(!info) 
   {
-    pstatus^=perr_r(make_effective_search ,  "No able to retrieve information  from this command %s\012",  target_command); 
+    pstatus^=perr_r(make_effective_search ,  "No able to retrieve information  for this '%s' command 012",  target_command); 
     goto __eplg ;
   } 
   on_exit(release , (void *)info) ; 
@@ -146,6 +160,33 @@ __eplg:
   return pstatus ;
 }
 
+static void check_compatibility_environment(void) 
+{
+  unsigned long sig=0;
+  char  *token  = (char *)00,
+        *shname = (token),
+        *shenv  = getenv("SHELL"); 
+
+  if(!shenv) 
+  {
+    (void) perr_r(compatiblity_errror, "on %s Your Shell is not supported Yet",  __func__) ; 
+    exit(EXIT_FAILURE) ;
+  }
+  
+
+  while((void *)00  != (token = strtok(shenv , "/"))) shname = (token), shenv=0;
+
+  size_t slen=(1<<8|strlen(shname)) ; 
+
+
+  /*!Peut etre plus tard j'aurai besoin  de tester d'autre type de shell 
+   * Pour le moment un simple warning  est suffisant 
+   * */ 
+  sig|=BASH_SIG;   
+  SIGMATCH(sig, shname, slen) ; 
+  if(sig) printf("Not able to check shell  signature for bash\012"); 
+
+}
 int  __preload_all_aliases(char * directive)  
 {
   /**See if it's a regular user  */ 
@@ -239,7 +280,7 @@ void brief(struct nataal_info_t *  cmd_info)
 #define  _Append(__typestr ,__str )({\
     size_t s  = strlen(__typestr) ;\
     strcat((__typestr+s), __str) ; \
-    *(__typestr+(strlen(__typestr))) = 0x20;  \
+    *(__typestr+(strlen(__typestr))) = 0x3a;  \
     })
 
    if (cmd_info->_type & BINARY_TYPE)  _Append(typestr, TYPE_STR(BINARY)) ; 
@@ -247,9 +288,9 @@ void brief(struct nataal_info_t *  cmd_info)
    if (cmd_info->_type & BUILTIN_TYPE) _Append(typestr, TYPE_STR(BUILTIN)) ; 
   
    if ((cmd_info->_type ^ BUILTIN_TYPE)) //!builtin type has no location  
-     fprintf(stdout , "Location: %s\n",cmd_info->_path); 
+     fprintf(stdout , "Location: %s\n",cmd_info->_path ? cmd_info->_path :"Not Found"); 
 
-   fprintf(stdout , "Type\t: [ %s]\n", typestr) ; 
+   fprintf(stdout , "Type\t: [:%s]\n", (1 < strlen(typestr))? typestr: "Unknow:")  ; 
 
    if (has_alias)  
      fprintf(stdout , "Alias\t: %s", has_alias)  ; 
@@ -276,6 +317,9 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
   {
     /** TODO : how to detect  if is a builtin command*/ 
   }
+  
+     
+  
   return local_info ; 
 }
 
@@ -317,6 +361,8 @@ static int looking_for_elf_signature(const char * location)
 
   char elf_header_sig[5] ={0} ; 
   ssize_t  size = 4 ; 
+  unsigned  int  elf_check=0;
+
   FILE * bin =  fopen(location , "rb") ; 
   if(!bin) 
      return 0;  
@@ -325,7 +371,6 @@ static int looking_for_elf_signature(const char * location)
   assert(!(size)) ; 
   fclose(bin) ; 
    
-  unsigned  int  elf_check=0;
   size^= -~(size); 
   while( size <=4  ) 
      elf_check|=  *(elf_header_sig +size-1) << (8*size), size=-~size; 
