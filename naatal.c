@@ -1,5 +1,5 @@
 /** 
- * @file  naatal.c 
+ * @file  naatal.c - Pour les plus anglophone  ca sera kind.c   
  * @brief “Naatal lu fi nekk.”
  *         Revele le nature d'une commande 
  * @author Umar Ba <jUmarB@protonmail.com>  
@@ -7,7 +7,7 @@
  *             - je ne connais pas le comportement exacte  avec les autres shell (csh , fish , nu, elvish ...)
  * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation
  */
-
+#define  _GNU_SOURCE 
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <stdint.h> 
@@ -18,6 +18,7 @@
 #include <pwd.h> 
 #include <fcntl.h> 
 #include <sys/types.h> 
+#include <sys/mman.h> 
 #include <sys/wait.h> 
 #include <sys/stat.h> 
 #include <sys/cdefs.h> 
@@ -26,6 +27,12 @@
 # define __must_use  __attribute__((warn_unused_result)) 
 #else  
 # define __must_use /*  Nothing */ 
+#endif 
+
+#if __has_attribute(noreturn) 
+# define  __nortrn __attribute__((noreturn)) 
+# else 
+# define  __nortrn 
 #endif 
 
 #define _Nullable  
@@ -56,27 +63,43 @@
     })
 
 #define perr_r(__fname , ...)\
-  EXIT_FAILURE;do{perror(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)  
+  EXIT_FAILURE;do{puts(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)   
 
+
+/* Tous les 'dot file' .x vont etre considere  comme des fichiers  qui sont 
+ * dans le repertoire de l'utilisateur courrant 
+ **/
 #define  BASHRCS \
-  "/home/%s/.bashrc",\
-  "/etc/bash/bashrc"  /**Vous pouvez ajouter d'autre  sources*/ 
+  ".bashrc",\
+  "/etc/bash/bashrc"  /**Vous pouvez ajouter d'autres sources si vous voulez*/ 
 
 static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
-typedef  uint16_t pstat_t  ;  
-char  bashrcs_sources[][20] = {
+typedef uint16_t pstat_t  ;  
+typedef struct passwd   userinfo_t ; 
+
+char  bashrcs_sources[][0x14] = {
   BASHRCS,
   '\000'
 }; 
 
+/* Contiendrons repectivement les commandes builtin du shell  
+ * et les shells keywords 
+ **/ 
+//* ! BASH SHELL DOT FILE */
+#define BSH_DOT_FILE  "bash_builtinkw"
+char **shell_builtin=(char **)00, 
+     **shell_keyword=(char **)00; 
+
 #define  ALIAS_MAX_ROW 0xa 
 #define  ALIAS_STRLEN  0x64  
-/** Contiendra toutes les aliase definit*/ 
+/** Contiendra toutes les aliases definis*/ 
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
 char *has_alias = (char *)00  ; 
 
+/*information sur l'utilisateur */ 
+userinfo_t *uid= 00;  
 /**
- * @brief ceci  contient les information sur la command  
+ * @brief ceci  contient les informations sur la command  
  * _cmd : represente la command elle meme 
  * _type : le type de command   si c'est un BINAIRE , BUILTIN  ou bien un ALIAS
  * _path : la ou la commande se trouve 
@@ -95,17 +118,20 @@ static char *search_in_sysbin(struct   nataal_info_t  *  cmd_info) ;
 static int looking_for_elf_signature(const char *cmd_location) ;  
 
 /** Pre-Chargement des alias ... */
-int  __preload_all_aliases(char * _Nullable directive) __must_use;
+int  __preload_all_aliases(struct passwd * uid ) __must_use;
 /*
  * @brief  detecte alias key word from bashrc sources   
  * */
 static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t  /* Read only */) ;
-
-
 static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata);  
 
-static char  is_builtin(const char*  cmd) ;  
+/** Chargement des command builtin et les shell keywords*/
+static void * __load_shell_builtin_keywords(const char*  cmd) ;  
+static int memfd_spawn(int fd ) ; 
 
+static size_t  inject_shell_statement(int fd); 
+
+static void check_compatibility_environment(void) ;   
 void release(int rc , void *args) 
 {
    struct nataal_info_t *  info =  (struct nataal_info_t *) args ; 
@@ -118,26 +144,33 @@ void release(int rc , void *args)
    free(info) ; 
    info = 0  ; 
 }
-
-static void check_compatibility_environment(void) ;   
- 
+static struct passwd * check_scope_action_for(struct passwd * user_id) ;  
 int main (int ac , char **av,  char **env) 
 {
   pstat_t pstatus =EXIT_SUCCESS;
   (void) setvbuf(stdout , (char *)0 , _IONBF , 0) ; 
-  
+  /* A partir de la je  fais une serie de verification  comme  : 
+   * l'environement  - le scope de l'utilisateur (uid et le shell) 
+   * car je ne veux pas permettre qu'il fasse du n'imp  ;) 
+   * */
   /* Pour le moment le programme est compatible  avec bash les autres  peut etre dans un future proche */ 
-  check_compatibility_environment() ;  
+  check_compatibility_environment() ;
   
+  uid =  check_scope_action_for(uid) ; 
+
   if (!(ac &~(1))) 
   {
     pstatus^=perr_r(nataal ,_NATAAL_WARNING_MESG); 
     goto __eplg; 
   }
   char *target_command = (char *) *(av+(ac+~0)); 
-  int summary_stat = __preload_all_aliases(target_command); 
+   
+  __load_shell_builtin_keywords(BSH_DOT_FILE) ; 
+  
+  int summary_stat = __preload_all_aliases(uid); 
+  
   if( 0 >= (summary_stat >>  8) )  
-   option_search&=~ALIAS_TYPE ;  /*disable  alias searching */
+   option_search&=~ALIAS_TYPE ;  /*Si je ne vois pas d'alias je l'enleve*/
   
   /*
    * Franchement j'ai la flemme  de creer d'autre variables 
@@ -165,7 +198,7 @@ static void check_compatibility_environment(void)
   unsigned long sig=0;
   char  *token  = (char *)00,
         *shname = (token),
-        *shenv  = getenv("SHELL"); 
+        *shenv  = secure_getenv("SHELL"); 
 
   if(!shenv) 
   {
@@ -173,59 +206,68 @@ static void check_compatibility_environment(void)
     exit(EXIT_FAILURE) ;
   }
   
-
-  while((void *)00  != (token = strtok(shenv , "/"))) shname = (token), shenv=0;
+  while((void *)00  != (token = strtok(shenv , (const char []){0x2f, 00} ))) shname = (token), shenv=0;
 
   size_t slen=(1<<8|strlen(shname)) ; 
-
 
   /*!Peut etre plus tard j'aurai besoin  de tester d'autre type de shell 
    * Pour le moment un simple warning  est suffisant 
    * */ 
   sig|=BASH_SIG;   
   SIGMATCH(sig, shname, slen) ; 
-  if(sig) printf("Not able to check shell  signature for bash\012"); 
+  if(sig) printf("Not able to check shell signature for bash\012"); 
 
 }
-int  __preload_all_aliases(char * directive)  
+
+static struct passwd * check_scope_action_for(struct passwd * user_id)   
 {
-  /**See if it's a regular user  */ 
-  int  authorized_uid = 0x3e8 ;  
-  
-  char *current_user_session = getenv("USER") ; 
-  if(!current_user_session) 
-    return ~0 ;   
- 
-  struct passwd *user  = getpwnam(current_user_session);
-  if(!user) 
-    return ~0 ; 
-  
-  if(authorized_uid  >   user->pw_uid )
+  char *username  =  secure_getenv("USER"); 
+  if (!username)
   {
-    /** Ici je n'autorise pas  les utilisateur standard et root */  
-    /**TODO: specifier un code d'erreur  plus approprier */
-    return    ~0;  
+     perr_r(check_scope_action_for , "Username %s is not found \012", username) ; 
+     exit(EXIT_FAILURE) ;
+  }
+
+  user_id = getpwnam(username) ; 
+  if(!user_id ) 
+  {
+    perr_r(check_scope_action_for , "%i  due to  :%s\012", *__errno_location())  ;
+    exit(EXIT_FAILURE)  ; 
   }
   
-  /**On charge les fichier source  des bashrcs*/ 
-  char user_bashrc[0x32] = {0} ;
-  sprintf(user_bashrc , *(bashrcs_sources) ,  current_user_session) ;  
+  /**je verifie  si c'est un utlilisateur normal*/ 
+  if(0x3e8 > (user_id->pw_uid & 0xfff))  
+  {
+    perr_r(check_scope_action_for,"%i is restricted  : %s\012", user_id->pw_uid,strerror(EPERM) )  ;  
+    exit(EXIT_FAILURE); 
+  }
+  return user_id ; 
+}
 
-  //!TODO: mettre ca dans une function 
+
+int  __preload_all_aliases(struct  passwd *  uid)  
+{
   off_t offset_index= ~0;  
   while(  00 != *(*(bashrcs_sources+ (++offset_index))) )    
   { 
-     if (0 == offset_index) 
+     char  * shrc = (*(bashrcs_sources+(offset_index))) ; 
+     switch(*(shrc) & 0xff) 
      {
-       memcpy((bash_aliases+offset_index)  , user_bashrc  , strlen(user_bashrc));  
-       continue ; 
-     } 
-     memcpy(*(bash_aliases+offset_index)  ,  *(bashrcs_sources+offset_index),
-         strlen(*(bashrcs_sources+offset_index))) ; 
+       case  0x2e  :
+         char user_home_profile[0x32] ={0}  ;  
+         sprintf(user_home_profile ,  "%s/%s", uid->pw_dir,  shrc) ;  
+         if(!(~0 ^ access(user_home_profile , F_OK))) 
+           continue ; 
+        
+         memcpy((bash_aliases+offset_index) , user_home_profile , strlen(user_home_profile)) ;  
+         break ; 
+       case  0x2f  :
+        memcpy(*(bash_aliases+offset_index)  , shrc , strlen(shrc)) ; 
+        break ;  
+     }
   } 
 
   return load_alias_from(bash_aliases , offset_index) ;
- 
 
 }
 
@@ -245,6 +287,7 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
        FILE *fp = fopen(bashsrc , "r") ;  
        if(!fp) 
          return  errno;   
+
        char inline_buffer[1024] ={0} ; 
        while((fgets(inline_buffer, 1024 ,  fp)))  
        { 
@@ -318,14 +361,12 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
     /** TODO : how to detect  if is a builtin command*/ 
   }
   
-     
-  
   return local_info ; 
 }
 
 static char  * search_in_sysbin(struct nataal_info_t * local_info) 
 { 
-  char *path_bins  = getenv("PATH") ; 
+  char *path_bins  = secure_getenv("PATH") ; 
   if(!path_bins)  
     return (void *) 0  ;   
   
@@ -400,4 +441,93 @@ static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata
 
   return (char *) 00 ; 
 
+}
+
+
+static void * __load_shell_builtin_keywords(const char* sh_dot_file)  
+{ 
+  /** 
+   * Pour le chargement  des shell builtin et  les mots cle 
+   * les charger depuis un fichier dot file placer dans le repertoire de l'utilisateur 
+   * cpdt si ce fichier n'existe pas faudra le generer 
+   * Pour une premiere lancement de ce programme  il va le creer et les mettres a l'interieure  (oui ca sera long de qlq millis)
+   * mais apres ca ira plus vite  
+   * */
+  int   io_request = EACCES , 
+        mfd=~0 ; 
+
+  if(!(~0  ^ (access(sh_dot_file , F_OK))))  
+    io_request&=~EACCES ; 
+  
+  if(!io_request)  
+  { 
+     mfd ^=  memfd_create("__anon__",MFD_CLOEXEC) ;
+     if(!mfd)
+     {
+       //!TODO :  trouver une alternative au cas ou ca echoue ... (flemmardise  en action XD!!! )  
+       perr_r(memfd_create, " %s", strerror(*__errno_location())) ;   
+     }
+     
+     mfd=~mfd ; 
+      
+     if(ftruncate(mfd , sysconf(_SC_PAGESIZE)))  
+     {
+        perr_r(ftruncate , "Fail to expend memory fd offset  : %s \012 ", strerror(*__errno_location()))    ; 
+        return (void *)0; 
+     } 
+     
+     ssize_t size = inject_shell_statement(mfd) ; 
+
+     
+     int s = memfd_spawn(mfd)   ;   
+     return (void *)0   ;  
+  }  
+  
+  
+  return (void *)0;  
+}
+
+
+static size_t  inject_shell_statement(int fd) 
+{
+   char var[0x50] ={0}  ;
+   sprintf(var  , "declare -r bsh_bltkw=\"%s/.%s\"\012",uid->pw_dir,BSH_DOT_FILE);  
+  
+   char *inline_statements[] = {
+     "#!/bin/bash\012",
+     var, 
+     "compgen -b >  ${bsh_bltkw}\012\012",
+     "compgen -k >> ${bsh_bltkw}\012",
+     NULL 
+   } ; 
+
+   int i =0 ; 
+   while((void *)0  != *(inline_statements+i))
+   {
+     write(fd ,  *(inline_statements+i) , strlen(*(inline_statements+i) )) , i=-~i ;   
+   } 
+  
+   lseek(fd, 0 ,0)  ;  
+
+}
+
+static int  memfd_spawn(int fd)
+{
+   pid_t  cproc=~0; 
+   cproc ^=fork() ; 
+   if(!cproc) 
+     return  ~0 ; 
+  
+   cproc=~cproc  ;  
+  
+   if(!(0xffff &~(0xffff ^ cproc))) 
+   {
+     return 0;  
+   }else{
+     int s =0 ; 
+     wait(&s) ;  
+     return  s; 
+   }
+  
+   return  ~0 ;  
 }
