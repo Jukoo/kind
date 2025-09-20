@@ -3,10 +3,12 @@
  * @brief “Naatal lu fi nekk.”
  *         Revele le nature d'une commande 
  * @author Umar Ba <jUmarB@protonmail.com>  
- * @warning :  Ce programme est compatible avec bash pour le moment 
- *             - je ne connais pas le comportement exacte  avec les autres shell (csh , fish , nu, elvish ...)
+ * @warning :  Ce programme est compatible avec bash car ce dernier a ete develope sous cet environement.
+ * Je ne connais pas le comportement exacte  avec les autres shell (csh , fish , nushell, elvish ...)
+ * Veuillez investiguer la dessus . 
  * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation
  */
+
 #define  _GNU_SOURCE 
 #include <stdio.h> 
 #include <stdlib.h> 
@@ -22,6 +24,7 @@
 #include <sys/wait.h> 
 #include <sys/stat.h> 
 #include <sys/cdefs.h> 
+
 
 #if __has_attribute(warn_unused_result) 
 # define __must_use  __attribute__((warn_unused_result)) 
@@ -96,6 +99,7 @@ char **shell_builtin=(char **)00,
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
 char *has_alias = (char *)00  ; 
 
+extern char ** environ ; 
 /*information sur l'utilisateur */ 
 userinfo_t *uid= 00;  
 /**
@@ -126,8 +130,9 @@ static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t  /* Read only */
 static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata);  
 
 /** Chargement des command builtin et les shell keywords*/
-static void * __load_shell_builtin_keywords(const char*  cmd) ;  
-static int memfd_spawn(int fd ) ; 
+static int __load_shell_builtin_keywords(const char*  cmd) ;  
+static int  spawn(const char * dot_file) ; 
+static int memfd_exec(int fd) ; 
 
 static size_t  inject_shell_statement(int fd); 
 
@@ -444,10 +449,10 @@ static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata
 }
 
 
-static void * __load_shell_builtin_keywords(const char* sh_dot_file)  
+static int  __load_shell_builtin_keywords(const char* sh_dot_file)  
 { 
   /** 
-   * Pour le chargement  des shell builtin et  les mots cle 
+   * Pour le chargement  des shell builtin et  les mots cles 
    * les charger depuis un fichier dot file placer dans le repertoire de l'utilisateur 
    * cpdt si ce fichier n'existe pas faudra le generer 
    * Pour une premiere lancement de ce programme  il va le creer et les mettres a l'interieure  (oui ca sera long de qlq millis)
@@ -456,63 +461,99 @@ static void * __load_shell_builtin_keywords(const char* sh_dot_file)
   int   io_request = EACCES , 
         mfd=~0 ; 
 
-  if(!(~0  ^ (access(sh_dot_file , F_OK))))  
+  if(!(~0 ^ (access(sh_dot_file , F_OK))))  
     io_request&=~EACCES ; 
   
   if(!io_request)  
-  { 
-     mfd ^=  memfd_create("__anon__",MFD_CLOEXEC) ;
-     if(!mfd)
+  {  
+     if(spawn(sh_dot_file)) 
      {
-       //!TODO :  trouver une alternative au cas ou ca echoue ... (flemmardise  en action XD!!! )  
-       perr_r(memfd_create, " %s", strerror(*__errno_location())) ;   
-     }
-     
-     mfd=~mfd ; 
-      
-     if(ftruncate(mfd , sysconf(_SC_PAGESIZE)))  
-     {
-        perr_r(ftruncate , "Fail to expend memory fd offset  : %s \012 ", strerror(*__errno_location()))    ; 
-        return (void *)0; 
+        perr_r(spawn, "Not able to create  %s \012", BSH_DOT_FILE) ; 
+        option_search &=~SHELL_KW_TYPE ; 
+        return EPERM; 
      } 
-     
-     ssize_t size = inject_shell_statement(mfd) ; 
-
-     
-     int s = memfd_spawn(mfd)   ;   
-     return (void *)0   ;  
+     io_request|=EACCES;    
   }  
+
+
   
   
-  return (void *)0;  
+  return 0 ; 
 }
 
 
+static int  spawn(const char * dot_file) 
+{ 
+  int mfd =~0; 
+  mfd ^=  memfd_create("__anon__",MFD_CLOEXEC) ;
+  if(!mfd)
+  {
+    //!TODO :  trouver une alternative au cas ou ca echoue ... (Pour le moment j'ai la flemme)  
+    perr_r(memfd_create, " %s", strerror(*__errno_location())) ;  
+    return  *__errno_location() ;  
+  }
+
+  mfd=~mfd ; 
+     
+  if(ftruncate(mfd , (sysconf(_SC_PAGESIZE)>>1) ))   
+  {
+    perr_r(ftruncate , "Fail to expend memory fd offset : %s \012 ", strerror(*__errno_location()))    ; 
+    return   *__errno_location() ;  
+  } 
+     
+  ssize_t bytes = inject_shell_statement(mfd); 
+  /** Ici je proceed  a une verification pour ne pas polluer la memoire 
+   * l'injection du script en  memoire ne doit pas execeder les 2048 (soit 1/2  d'un block de page)
+   **/
+    
+  if( (bytes &~((sysconf(_SC_PAGESIZE)>>1)-1)))  
+  {
+    perr_r(page_block_overflow , "The bytes size of fd  should be < 2048\012"); 
+    return  EOVERFLOW  ; 
+  }
+  int getflags = fcntl(mfd ,  F_GETFD) ; 
+  if(O_RDONLY != getflags  ) 
+  {
+    getflags=(getflags^getflags)  ; 
+    getflags|=O_RDONLY ; 
+    /* Je verrou le fichier seulement en lecture seul pour sur */ 
+    (void) fcntl(mfd , F_SETFD , getflags);   
+  }
+  
+  getflags = memfd_exec(mfd);
+  if(getflags) 
+     option_search&=~SHELL_KW_TYPE ; 
+  
+  return 0 ;
+}
+
 static size_t  inject_shell_statement(int fd) 
-{
+{  
    char var[0x50] ={0}  ;
    sprintf(var  , "declare -r bsh_bltkw=\"%s/.%s\"\012",uid->pw_dir,BSH_DOT_FILE);  
-  
+   
    char *inline_statements[] = {
      "#!/bin/bash\012",
      var, 
-     "compgen -b >  ${bsh_bltkw}\012\012",
+     "compgen -b >  ${bsh_bltkw}\012",
+     "echo -e '\043' >> ${bsh_bltkw}\012", 
      "compgen -k >> ${bsh_bltkw}\012",
      NULL 
-   } ; 
+   }; 
 
-   int i =0 ; 
+   char i =0 ;
+   size_t bytes =  0; 
    while((void *)0  != *(inline_statements+i))
-   {
-     write(fd ,  *(inline_statements+i) , strlen(*(inline_statements+i) )) , i=-~i ;   
-   } 
+     bytes+=write(fd , *(inline_statements+i),strlen(*(inline_statements+i) )),i=-~i ;   
   
-   lseek(fd, 0 ,0)  ;  
+   lseek(fd,0,0);  
 
+   return bytes; 
 }
 
-static int  memfd_spawn(int fd)
-{
+static int  memfd_exec(int fd)
+{  
+
    pid_t  cproc=~0; 
    cproc ^=fork() ; 
    if(!cproc) 
@@ -522,10 +563,14 @@ static int  memfd_spawn(int fd)
   
    if(!(0xffff &~(0xffff ^ cproc))) 
    {
-     return 0;  
+     int status = fexecve(fd,
+                          (char *const[]) {uid->pw_shell , (void *)0},
+                          environ
+                          ) ; 
+     return status ;    
    }else{
      int s =0 ; 
-     wait(&s) ;  
+     wait(&s) ;   
      return  s; 
    }
   
