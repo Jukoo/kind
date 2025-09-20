@@ -89,7 +89,7 @@ char  bashrcs_sources[][0x14] = {
  * et les shells keywords 
  **/ 
 //* ! BASH SHELL DOT FILE */
-#define BSH_DOT_FILE  "bash_builtinkw"
+#define BSH_DOT_FILE  ".bash_builtinkw"
 char **shell_builtin=(char **)00, 
      **shell_keyword=(char **)00; 
 
@@ -98,8 +98,9 @@ char **shell_builtin=(char **)00,
 /** Contiendra toutes les aliases definis*/ 
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
 char *has_alias = (char *)00  ; 
-
-extern char ** environ ; 
+size_t dot_file_size  = 0 ; 
+extern char ** environ ;
+char * bkw_source  = (void*)00; 
 /*information sur l'utilisateur */ 
 userinfo_t *uid= 00;  
 /**
@@ -116,6 +117,8 @@ struct nataal_info_t
       char * _path ; 
     } ; 
 } ; 
+
+
 void brief(struct nataal_info_t  *cmd_info) ; 
 struct  nataal_info_t*  make_effective_search(const char * cmd_tgt , int search_option) ;  
 static char *search_in_sysbin(struct   nataal_info_t  *  cmd_info) ; 
@@ -124,11 +127,12 @@ static int looking_for_elf_signature(const char *cmd_location) ;
 /** Pre-Chargement des alias ... */
 int  __preload_all_aliases(struct passwd * uid ) __must_use;
 /*
- * @brief  detecte alias key word from bashrc sources   
+ * @brief  detection des alias depuis  les fichers bashrc  disponible 
  * */
 static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t  /* Read only */) ;
-static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata);  
-
+static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata); 
+static void  looking_for_builtin_cmd(struct nataal_info_t*  cmd_info   , const char *shkw_builtin) ;  
+static void  looking_for_shell_keyword(struct nataal_info_t * cmd_info , const char *shkw_builtin) ; 
 /** Chargement des command builtin et les shell keywords*/
 static int __load_shell_builtin_keywords(const char*  cmd) ;  
 static int  spawn(const char * dot_file) ; 
@@ -136,6 +140,7 @@ static int memfd_exec(int fd) ;
 
 static size_t  inject_shell_statement(int fd); 
 
+static char * map_dump(const char * dot_file); 
 static void check_compatibility_environment(void) ;   
 void release(int rc , void *args) 
 {
@@ -148,6 +153,9 @@ void release(int rc , void *args)
   
    free(info) ; 
    info = 0  ; 
+  
+   if(bkw_source)  
+    munmap(bkw_source , dot_file_size), bkw_source= 0; 
 }
 static struct passwd * check_scope_action_for(struct passwd * user_id) ;  
 int main (int ac , char **av,  char **env) 
@@ -169,8 +177,10 @@ int main (int ac , char **av,  char **env)
     goto __eplg; 
   }
   char *target_command = (char *) *(av+(ac+~0)); 
-   
-  __load_shell_builtin_keywords(BSH_DOT_FILE) ; 
+  char  dotfile_path[0x32]= {0} ;  
+  sprintf(dotfile_path , "%s/%s",  uid->pw_dir, BSH_DOT_FILE) ;  
+  __load_shell_builtin_keywords(dotfile_path); 
+  
   
   int summary_stat = __preload_all_aliases(uid); 
   
@@ -322,7 +332,7 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
 void brief(struct nataal_info_t *  cmd_info) 
 {
    char  typestr[0x32] ={0};   
-   fprintf(stdout ,  "command\t: %s\n", cmd_info->_cmd);
+   fprintf(stdout ,  "command\011: %s\012", cmd_info->_cmd);
    if (!cmd_info->_path  && !cmd_info->_type )   return ; 
 
 #define  _Append(__typestr ,__str )({\
@@ -334,14 +344,16 @@ void brief(struct nataal_info_t *  cmd_info)
    if (cmd_info->_type & BINARY_TYPE)  _Append(typestr, TYPE_STR(BINARY)) ; 
    if (cmd_info->_type & ALIAS_TYPE)   _Append(typestr, TYPE_STR(ALIAS)) ; 
    if (cmd_info->_type & BUILTIN_TYPE) _Append(typestr, TYPE_STR(BUILTIN)) ; 
-  
-   if ((cmd_info->_type ^ BUILTIN_TYPE)) //!builtin type has no location  
-     fprintf(stdout , "Location: %s\n",cmd_info->_path ? cmd_info->_path :"Not Found"); 
+   
+   if (!(cmd_info->_type & BUILTIN_TYPE)) //!builtin type has no location  
+     fprintf(stdout , "Location: %s\012",cmd_info->_path ? cmd_info->_path :"Not Found");
+   else 
+     fprintf(stdout , "Location: is a shell builtin\012");
 
-   fprintf(stdout , "Type\t: [:%s]\n", (1 < strlen(typestr))? typestr: "Unknow:")  ; 
+   fprintf(stdout , "Type\011: [:%s]\012", (1 < strlen(typestr))? typestr: "Unknow:")  ; 
 
    if (has_alias)  
-     fprintf(stdout , "Alias\t: %s", has_alias)  ; 
+     fprintf(stdout , "Alias\011: %s", has_alias)  ; 
 }
 
 struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int search_option)
@@ -363,7 +375,13 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
   
   if(search_option  &  BUILTIN_TYPE) 
   {
-    /** TODO : how to detect  if is a builtin command*/ 
+     looking_for_builtin_cmd(local_info  , bkw_source) ;  
+  }
+  
+  if(search_option & SHELL_KW_TYPE)  
+  {
+     /** TODO : FOR SHELL KEY WORDS  */  
+    looking_for_shell_keyword(local_info , bkw_source) ;  
   }
   
   return local_info ; 
@@ -473,15 +491,32 @@ static int  __load_shell_builtin_keywords(const char* sh_dot_file)
         return EPERM; 
      } 
      io_request|=EACCES;    
-  }  
+  }
 
-
-  
-  
+  bkw_source=map_dump(sh_dot_file);   
+ 
   return 0 ; 
 }
 
+static char * map_dump(const char * dot_file) 
+{ 
 
+   int fd =  ~0 ; 
+   fd^=open(dot_file , O_RDONLY) ; 
+   if(!fd) 
+     return (void *)0 ;
+   
+   fd=~fd  ; 
+   struct stat  sb ; 
+   fstat(fd , &sb);  
+   dot_file_size  =  sb.st_size  ; 
+   bkw_source = (char *)mmap((void *)0 ,sb.st_size , PROT_READ , MAP_PRIVATE , fd , 0) ; 
+   close(fd) ; 
+   if (MAP_FAILED ==   bkw_source) 
+     return (void *)0 ;  
+
+   return  bkw_source ;  
+}
 static int  spawn(const char * dot_file) 
 { 
   int mfd =~0; 
@@ -489,7 +524,7 @@ static int  spawn(const char * dot_file)
   if(!mfd)
   {
     //!TODO :  trouver une alternative au cas ou ca echoue ... (Pour le moment j'ai la flemme)  
-    perr_r(memfd_create, " %s", strerror(*__errno_location())) ;  
+    perr_r(memfd_create, " %s", strerror(*__errno_location())); 
     return  *__errno_location() ;  
   }
 
@@ -508,7 +543,7 @@ static int  spawn(const char * dot_file)
     
   if( (bytes &~((sysconf(_SC_PAGESIZE)>>1)-1)))  
   {
-    perr_r(page_block_overflow , "The bytes size of fd  should be < 2048\012"); 
+    perr_r(page_block_overflow , "The allowed bytes size of fd should be < 2048\012"); 
     return  EOVERFLOW  ; 
   }
   int getflags = fcntl(mfd ,  F_GETFD) ; 
@@ -516,7 +551,7 @@ static int  spawn(const char * dot_file)
   {
     getflags=(getflags^getflags)  ; 
     getflags|=O_RDONLY ; 
-    /* Je verrou le fichier seulement en lecture seul pour sur */ 
+    /* Je verrou l'index du fichier present dans le memoire seulement en lecture seul pour sur */ 
     (void) fcntl(mfd , F_SETFD , getflags);   
   }
   
@@ -526,7 +561,6 @@ static int  spawn(const char * dot_file)
   
   return 0 ;
 }
-
 static size_t  inject_shell_statement(int fd) 
 {  
    char var[0x50] ={0}  ;
@@ -575,4 +609,37 @@ static int  memfd_exec(int fd)
    }
   
    return  ~0 ;  
+}
+
+
+static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * shbkw)  
+{
+  
+  char builtin_cmd[0x14]={0} , i = 0 , 
+       *builtins  = (char *) shbkw ;   
+
+  while ( ((*builtins & 0xff) ^  0x23))
+  {
+     char *linefeed  = strchr(builtins, 0xa);  
+     if (linefeed) 
+        i =  linefeed -  builtins;
+     
+     memcpy(builtin_cmd ,   builtins ,  i ) ; 
+     
+     if(!strcmp(cmd->_cmd , builtin_cmd))
+     {
+       cmd->_type|=BUILTIN_TYPE ; 
+       return ;  
+     }
+      
+     builtins = (builtins+(i+1)) ;   
+     bzero(builtin_cmd  , i ) ; 
+  }
+  
+
+}
+
+static void  looking_for_shell_keyword(struct nataal_info_t * cmd , const char * shbkw) 
+{
+  
 }
