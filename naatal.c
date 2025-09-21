@@ -53,11 +53,12 @@
 #define  SHELL_KW_STR  "Shell keyword"  
 /* Et oui , parfois certains command sont dans /usr/bin et ce sont bien des scripts */
 #define  SCRIPT_TYPE (1<<4) 
-#define  SCRIPT_STR "Potential Script"  
+#define  SCRIPT_STR "script"  
 
 #define  TYPE_STR(__type) \
    __type##_STR
 
+#define  SHEBANG   0x212300  /* Pour la detection des scripts potentiel  */ 
 #define  BASH_SIG  0x73616268 
 #define  ELF_SIG   0x4c457f46  
 #define  MA_ALIAS  0x61696c6173 
@@ -334,7 +335,8 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
 }
 void brief(struct nataal_info_t *  cmd_info) 
 {
-   char  typestr[0x32] ={0};   
+   char  typestr[0x32] ={0} ; 
+   char  hint =0 ; 
    fprintf(stdout ,  "command\011: %s\012", cmd_info->_cmd);
    if (!cmd_info->_path  && !cmd_info->_type )   return ; 
 
@@ -344,29 +346,39 @@ void brief(struct nataal_info_t *  cmd_info)
     *(__typestr+(strlen(__typestr))) = 0x3a;  \
     })
 
-   if (cmd_info->_type & BINARY_TYPE)  _Append(typestr, TYPE_STR(BINARY)) ; 
-   if (cmd_info->_type & ALIAS_TYPE)   _Append(typestr, TYPE_STR(ALIAS)) ; 
-   if (cmd_info->_type & BUILTIN_TYPE) _Append(typestr, TYPE_STR(BUILTIN)) ; 
-   if (cmd_info->_type & SHELL_KW_TYPE) _Append(typestr, TYPE_STR(SHELL_KW)) ; 
+   if (cmd_info->_type & BINARY_TYPE)   _Append(typestr, TYPE_STR(BINARY)) ; 
+   if (cmd_info->_type & ALIAS_TYPE)    _Append(typestr, TYPE_STR(ALIAS)) ; 
+   if (cmd_info->_type & BUILTIN_TYPE)  _Append(typestr, TYPE_STR(BUILTIN)) ; 
+   if (cmd_info->_type & SHELL_KW_TYPE) _Append(typestr, TYPE_STR(SHELL_KW)) ;
+   if (cmd_info->_type & SCRIPT_TYPE)   _Append(typestr, TYPE_STR(SCRIPT)); 
   
    fprintf(stdout,"Location:") ; 
-   if ((cmd_info->_type  &(BINARY_TYPE | ALIAS_TYPE ))) 
+   if ((cmd_info->_type  &(BINARY_TYPE | ALIAS_TYPE | SCRIPT_TYPE ))) 
      fprintf(stdout , " %s", cmd_info->_path ? cmd_info->_path :"Not Found");
      
    if (cmd_info->_type & BUILTIN_TYPE)  
      fprintf(stdout , " <is a shell builtin>");
    
    if((cmd_info->_type & SHELL_KW_TYPE))
-     fprintf(stdout , " <is a shell keyword>") ;
+     fprintf(stdout , " <is a shell keyword>") ; 
 
-   puts(" ") ; 
+   if(cmd_info->_type & SCRIPT_TYPE)  
+   {
+     fprintf(stdout , " <is potentially a script>") ; 
+     hint^=1 ;
+   }
+  
+   puts("") ; 
 
 
    fprintf(stdout , "Type\011: [:%s]\012", (1 < strlen(typestr))? typestr: "Unknow:")  ; 
 
-
    if (has_alias)  
      fprintf(stdout , "Alias\011: %s", has_alias)  ; 
+
+   if(hint) 
+     /* Je laisse ce tips la: car la commande 'file' peut deja faire une investigation */
+     fprintf(stdout , "Hint: Please Use 'file' command to investigate further\012") ;
 }
 
 struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int search_option)
@@ -425,8 +437,8 @@ static char  * search_in_sysbin(struct nataal_info_t * local_info)
     } 
     break ; 
   } 
+  
   local_info->_path = token ? strdup(token) :(char *)00 ; 
-
   local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
   
   return   (char *) local_info ;  
@@ -444,27 +456,32 @@ static int looking_for_signature(const char * location ,  int options)
   FILE * bin =  fopen(location , "rb") ; 
   if(!bin) 
      return 0;  
+
+  size ^=fread(elf_header_sig ,1  ,4 , bin); 
+  assert(!(size)) ; 
+  fclose(bin) ; 
+
+  size^= -~(size); 
   if(options  & BINARY_TYPE) 
   {
-    size ^=fread(elf_header_sig ,1  ,4 , bin); 
-    assert(!(size)) ; 
-    fclose(bin) ; 
-   
-    size^= -~(size); 
     while( size <=4  ) 
       elf_check|=  *(elf_header_sig +size-1) << (8*size), size=-~size;   
     
-    return !(elf_check^ELF_SIG) ? BINARY_TYPE : 0 ; 
+    flags  = !(elf_check^ELF_SIG) ? BINARY_TYPE : 0 ; 
   } 
   
-  if(options & SCRIPT_TYPE) 
-  {
+  if(options & SCRIPT_TYPE && !flags) 
+  { 
+    elf_check&=~elf_check, size=1;   
+    /*TODO : Detection si  la command est un potantiel script */ 
+    while(size <=2  ) 
+      elf_check|= *(elf_header_sig+ (size-1))  <<(8*size), size=-~size ;  
     
-  }
-    
-  
+    flags = !(elf_check ^ SHEBANG)  ? SCRIPT_TYPE : 0 ; 
 
-  return   flags; 
+  }
+
+  return flags ;  
 }
 
 
@@ -665,5 +682,31 @@ static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * s
 
 static void  looking_for_shell_keyword(struct nataal_info_t * cmd , const char * shbkw) 
 {
-  
+
+  char *shell_kw = strchr(shbkw ,  0x23) , 
+       kword[0x14] = {0} ; 
+  if(!shell_kw) 
+  {
+     option_search&=~SHELL_KW_TYPE ;  
+     return ; 
+  }
+  shell_kw=(shell_kw+2) ; 
+   
+  int index_jmp  = 0 ;   
+  while('\000' !=  (*shell_kw  & 0xff )  &&  !(cmd->_type ^ SHELL_KW_TYPE)) ; 
+  {
+     char *linefeed  = strchr(shell_kw , '\012') ; 
+     if(linefeed)  
+       index_jmp =  linefeed -  shell_kw ; 
+    
+     memcpy(kword , shell_kw , index_jmp) ;  
+    
+     if(!strcmp(cmd->_cmd , kword)) 
+       cmd->_type |= SHELL_KW_TYPE ; 
+    
+     index_jmp=-~index_jmp ; 
+     shell_kw  = (shell_kw +index_jmp) ; 
+     bzero(kword , 0x14) ; 
+  }
+
 }
