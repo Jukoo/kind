@@ -50,7 +50,10 @@
 #define  ALIAS_TYPE   (1 << 2)
 #define  ALIAS_STR    "alias" 
 #define  SHELL_KW_TYPE (1<< 3) 
-#define  SHELL_KW_STR  "Shell keyword" 
+#define  SHELL_KW_STR  "Shell keyword"  
+/* Et oui , parfois certains command sont dans /usr/bin et ce sont bien des scripts */
+#define  SCRIPT_TYPE (1<<4) 
+#define  SCRIPT_STR "Potential Script"  
 
 #define  TYPE_STR(__type) \
    __type##_STR
@@ -122,7 +125,7 @@ struct nataal_info_t
 void brief(struct nataal_info_t  *cmd_info) ; 
 struct  nataal_info_t*  make_effective_search(const char * cmd_tgt , int search_option) ;  
 static char *search_in_sysbin(struct   nataal_info_t  *  cmd_info) ; 
-static int looking_for_elf_signature(const char *cmd_location) ;  
+static int looking_for_signature(const char *cmd_location  , int operation) ;  
 
 /** Pre-Chargement des alias ... */
 int  __preload_all_aliases(struct passwd * uid ) __must_use;
@@ -344,13 +347,23 @@ void brief(struct nataal_info_t *  cmd_info)
    if (cmd_info->_type & BINARY_TYPE)  _Append(typestr, TYPE_STR(BINARY)) ; 
    if (cmd_info->_type & ALIAS_TYPE)   _Append(typestr, TYPE_STR(ALIAS)) ; 
    if (cmd_info->_type & BUILTIN_TYPE) _Append(typestr, TYPE_STR(BUILTIN)) ; 
+   if (cmd_info->_type & SHELL_KW_TYPE) _Append(typestr, TYPE_STR(SHELL_KW)) ; 
+  
+   fprintf(stdout,"Location:") ; 
+   if ((cmd_info->_type  &(BINARY_TYPE | ALIAS_TYPE ))) 
+     fprintf(stdout , " %s", cmd_info->_path ? cmd_info->_path :"Not Found");
+     
+   if (cmd_info->_type & BUILTIN_TYPE)  
+     fprintf(stdout , " <is a shell builtin>");
    
-   if (!(cmd_info->_type & BUILTIN_TYPE)) //!builtin type has no location  
-     fprintf(stdout , "Location: %s\012",cmd_info->_path ? cmd_info->_path :"Not Found");
-   else 
-     fprintf(stdout , "Location: is a shell builtin\012");
+   if((cmd_info->_type & SHELL_KW_TYPE))
+     fprintf(stdout , " <is a shell keyword>") ;
+
+   puts(" ") ; 
+
 
    fprintf(stdout , "Type\011: [:%s]\012", (1 < strlen(typestr))? typestr: "Unknow:")  ; 
+
 
    if (has_alias)  
      fprintf(stdout , "Alias\011: %s", has_alias)  ; 
@@ -413,34 +426,45 @@ static char  * search_in_sysbin(struct nataal_info_t * local_info)
     break ; 
   } 
   local_info->_path = token ? strdup(token) :(char *)00 ; 
-  local_info->_type|= looking_for_elf_signature(location) ; 
+
+  local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
   
   return   (char *) local_info ;  
 }
 
 
-static int looking_for_elf_signature(const char * location) 
+static int looking_for_signature(const char * location ,  int options) 
 { 
   if (!location) return 0 ;   
 
-  char elf_header_sig[5] ={0} ; 
+  char elf_header_sig[0xf] ={0} ; 
   ssize_t  size = 4 ; 
   unsigned  int  elf_check=0;
-
+  int flags = 0 ; 
   FILE * bin =  fopen(location , "rb") ; 
   if(!bin) 
      return 0;  
+  if(options  & BINARY_TYPE) 
+  {
+    size ^=fread(elf_header_sig ,1  ,4 , bin); 
+    assert(!(size)) ; 
+    fclose(bin) ; 
    
-  size ^=fread(elf_header_sig ,1  ,4 , bin); 
-  assert(!(size)) ; 
-  fclose(bin) ; 
-   
-  size^= -~(size); 
-  while( size <=4  ) 
-     elf_check|=  *(elf_header_sig +size-1) << (8*size), size=-~size; 
+    size^= -~(size); 
+    while( size <=4  ) 
+      elf_check|=  *(elf_header_sig +size-1) << (8*size), size=-~size;   
+    
+    return !(elf_check^ELF_SIG) ? BINARY_TYPE : 0 ; 
+  } 
+  
+  if(options & SCRIPT_TYPE) 
+  {
+    
+  }
+    
   
 
-  return    !(elf_check^ELF_SIG) ? BINARY_TYPE  : 0; 
+  return   flags; 
 }
 
 
@@ -551,7 +575,7 @@ static int  spawn(const char * dot_file)
   {
     getflags=(getflags^getflags)  ; 
     getflags|=O_RDONLY ; 
-    /* Je verrou l'index du fichier present dans le memoire seulement en lecture seul pour sur */ 
+    /* Je verrou l'index du fichier present dans la memoire en lecture seul pour sur */ 
     (void) fcntl(mfd , F_SETFD , getflags);   
   }
   
