@@ -39,13 +39,35 @@ Aucune dépendance externe.
 - [x] Compatible avec la plupart des shells 
 - [x] Idéal pour : le debug, les scripts, ou l’apprentissage du shell
 
-Comparaison avec `type` 
+### Comparaison avec `type` 
 
 | Commande   | Sortie de `type`                     | Sortie de `kind`                             |
 | ---------- | ------------------------------------ | -------------------------------------------- |
 | `type ls`  | `ls is aliased to 'ls --color=auto'` | Affichage structuré avec chemin, alias, etc. |
 | `type cd`  | `cd is a shell builtin`              | Plus lisible et détaillé                     |
 | `type foo` | `-bash: type: foo: not found`        | Message d’erreur clair et explicite          |
+
+
+`kind` va plus loin que la simple commande `type` en offrant un affichage structuré et des indices utiles.
+
+| Commande   | Sortie de `type`            | Sortie de `kind`                                        |
+|------------|-----------------------------|---------------------------------------------------------|
+| `type ldd` | `ldd is /usr/bin/ldd`       |  command : ldd                                          |
+|                                          |  Location : /usr/bin <is potentially a script>          |
+|                                          |  Type : [:script:]                                      |
+|                                          |  Hint : Please use 'file' command to investigate further|
+                                          
+
+#### Ce que ça montre
+
+- **`type`** se contente d’afficher l’emplacement ou le statut général de la commande.
+- **`kind`** va plus loin :
+  - détecte et précise qu’il s’agit potentiellement d’un script (pas seulement d’un binaire),
+  - affiche un format structuré et lisible (command, location, type),
+  - fournit des **indices contextuels** (“Hint”) pour aller plus loin (ici suggérer `file` pour inspecter le contenu du script).
+
+En résumé, **kind** ne se limite pas à dire *où* se trouve la commande, il aide à comprendre *ce qu’elle est vraiment*.
+
 
 ## Utilisation 
 
