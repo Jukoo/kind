@@ -1,7 +1,7 @@
-project('naatal', 'c',
+project('kind', 'c',
   version : '0.1',
   default_options : ['warning_level=3'])
 
-executable('naatal',
-           'naatal.c',
+executable('kind',
+           'kind.c',
            install : true)
