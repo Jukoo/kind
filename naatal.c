@@ -34,13 +34,19 @@
 
 #if __has_attribute(noreturn) 
 # define  __nortrn __attribute__((noreturn)) 
-# else 
+#else 
 # define  __nortrn 
 #endif 
 
 #define _Nullable  
 #define _Nonnulable  [static 01]  
 
+#if !defined(NDEBUG)
+# define pr_dbg(...) \
+  do{ printf("%s :",__func__); fprintf(stdout ,__VA_ARGS__);} while(0) 
+#else  
+# define  pr_dbg(...) /* ne fait rien du tout */ 
+#endif 
 #define _NATAAL_WARNING_MESG  "A utility to reveal real type of command \012"
 
 #define  BINARY_TYPE  (1 << 0)  
@@ -335,6 +341,7 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
 }
 void brief(struct nataal_info_t *  cmd_info) 
 {
+
    char  typestr[0x32] ={0} ; 
    char  hint =0 ; 
    fprintf(stdout ,  "command\011: %s\012", cmd_info->_cmd);
@@ -392,22 +399,17 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
   search_option  >>=8 ;  
   
   if (search_option & ALIAS_TYPE)  
-  {  
     has_alias =  looking_for_aliases(local_info, data ) ; 
-  }
+  
   if (search_option & BINARY_TYPE )
     (void *)search_in_sysbin(local_info);  
   
   if(search_option  &  BUILTIN_TYPE) 
-  {
      looking_for_builtin_cmd(local_info  , bkw_source) ;  
-  }
   
   if(search_option & SHELL_KW_TYPE)  
-  {
      /** TODO : FOR SHELL KEY WORDS  */  
     looking_for_shell_keyword(local_info , bkw_source) ;  
-  }
   
   return local_info ; 
 }
@@ -440,7 +442,7 @@ static char  * search_in_sysbin(struct nataal_info_t * local_info)
   
   local_info->_path = token ? strdup(token) :(char *)00 ; 
   local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
-  
+
   return   (char *) local_info ;  
 }
 
@@ -605,7 +607,7 @@ static int  spawn(const char * dot_file)
 static size_t  inject_shell_statement(int fd) 
 {  
    char var[0x50] ={0}  ;
-   sprintf(var  , "declare -r bsh_bltkw=\"%s/.%s\"\012",uid->pw_dir,BSH_DOT_FILE);  
+   sprintf(var  , "declare -r bsh_bltkw=\"%s/%s\"\012",uid->pw_dir,BSH_DOT_FILE);  
    
    char *inline_statements[] = {
      "#!/bin/bash\012",
@@ -613,6 +615,7 @@ static size_t  inject_shell_statement(int fd)
      "compgen -b >  ${bsh_bltkw}\012",
      "echo -e '\043' >> ${bsh_bltkw}\012", 
      "compgen -k >> ${bsh_bltkw}\012",
+     "echo -e 0 >> ${bsh_bltkw}",
      NULL 
    }; 
 
@@ -622,7 +625,6 @@ static size_t  inject_shell_statement(int fd)
      bytes+=write(fd , *(inline_statements+i),strlen(*(inline_statements+i) )),i=-~i ;   
   
    lseek(fd,0,0);  
-
    return bytes; 
 }
 
@@ -642,10 +644,11 @@ static int  memfd_exec(int fd)
                           (char *const[]) {uid->pw_shell , (void *)0},
                           environ
                           ) ; 
-     return status ;    
+     
+     exit(errno) ;   
    }else{
      int s =0 ; 
-     wait(&s) ;   
+     wait(&s) ; 
      return  s; 
    }
   
@@ -658,15 +661,15 @@ static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * s
   
   char builtin_cmd[0x14]={0} , i = 0 , 
        *builtins  = (char *) shbkw ;   
-
-  while ( ((*builtins & 0xff) ^  0x23))
+ 
+  while ( ((*builtins & 0xff) !=  0x23))
   {
      char *linefeed  = strchr(builtins, 0xa);  
      if (linefeed) 
         i =  linefeed -  builtins;
      
      memcpy(builtin_cmd ,   builtins ,  i ) ; 
-     
+
      if(!strcmp(cmd->_cmd , builtin_cmd))
      {
        cmd->_type|=BUILTIN_TYPE ; 
@@ -676,7 +679,7 @@ static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * s
      builtins = (builtins+(i+1)) ;   
      bzero(builtin_cmd  , i ) ; 
   }
-  
+ 
 
 }
 
@@ -691,22 +694,23 @@ static void  looking_for_shell_keyword(struct nataal_info_t * cmd , const char *
      return ; 
   }
   shell_kw=(shell_kw+2) ; 
-   
   int index_jmp  = 0 ;   
-  while('\000' !=  (*shell_kw  & 0xff )  &&  !(cmd->_type ^ SHELL_KW_TYPE)) ; 
+ 
+  while( (0x30^ (*(shell_kw) & 0xff ))) 
   {
-     char *linefeed  = strchr(shell_kw , '\012') ; 
-     if(linefeed)  
-       index_jmp =  linefeed -  shell_kw ; 
+    char *lf = strchr(shell_kw  ,012)  ; 
+    if(!lf) 
+      break ; 
     
-     memcpy(kword , shell_kw , index_jmp) ;  
+    index_jmp = (lf - shell_kw) ;
+    memcpy(kword ,  shell_kw , index_jmp) ; 
     
-     if(!strcmp(cmd->_cmd , kword)) 
-       cmd->_type |= SHELL_KW_TYPE ; 
-    
-     index_jmp=-~index_jmp ; 
-     shell_kw  = (shell_kw +index_jmp) ; 
-     bzero(kword , 0x14) ; 
+    if(!strcmp(cmd->_cmd, kword)) 
+    {
+       cmd->_type|=SHELL_KW_TYPE ; 
+       return ; 
+    }
+    bzero(kword , 0x14);
+    shell_kw =(shell_kw+(index_jmp+1)) ; 
   }
-
 }
