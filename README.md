@@ -28,6 +28,11 @@ Alias    : alias ls='ls --color=auto'
    meson  setup build
    meson compile -C build
    ```
+3. Vous pouvez installer ou le desinstaller  le projet en local  
+```bash 
+  meson install -C build    # pour installer 
+  ninja -C build uninstall  # pour desinstaller 
+```
 
 ## Dépendances
 Aucune dépendance externe.
