@@ -1,11 +1,22 @@
 /** 
  * @file   kind.c   
  * @brief  Une alternative moderne a la command  unix 'type' 
- * @author Umar Ba <jUmarB@protonmail.com>  2025 
- * @keyboard-lang : QWERTY  
+ * @keyboard-layout: QWERTY  
+ * -----------------------------------------------------------------------------------------------------
+ * Copyright (C) 2025 Umar Ba <jUmarB@protonmail.com> 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  * @warning :  Ce programme est compatible avec bash car ce dernier a ete develope sous cet environement.
  * le comportement peut varier legerement  selon le shell utilise  (csh,zsh, fish , nushell, elvish ...).
- * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation
+ * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation       
  */
 
 #define  _GNU_SOURCE 
@@ -22,13 +33,21 @@
 #include <sys/mman.h> 
 #include <sys/wait.h> 
 #include <sys/stat.h> 
-#include <sys/cdefs.h> 
+#include <sys/cdefs.h>
+#include "version.h"  /** Auto Generer par Meson */ 
+
 
 
 #if __has_attribute(warn_unused_result) 
 # define __must_use  __attribute__((warn_unused_result)) 
 #else  
 # define __must_use /*  Nothing */ 
+#endif 
+
+#if __has_attribute(unused) 
+# define  __notused __attribute__((unused)) 
+#else 
+# define  __notused 
 #endif 
 
 #if __has_attribute(noreturn) 
@@ -38,7 +57,6 @@
 #endif 
 
 #define _Nullable  
-#define _Nonnulable  [static 01]  
 
 #if !defined(NDEBUG)
 # define pr_dbg(...) \
@@ -46,7 +64,7 @@
 #else  
 # define  pr_dbg(...) /* ne fait rien  ... */ 
 #endif 
-#define _NATAAL_WARNING_MESG  "A utility to reveal real type of command \012"
+#define _KIND_WARNING_MESG  "A utility to reveal real type of command. An alternative to unix 'type' command\012"
 
 #define  BINARY_TYPE  (1 << 0)  
 #define  BINARY_STR   "binary" 
@@ -68,6 +86,7 @@
 #define  ELF_SIG   0x4c457f46         /* Signature pour le executables            */
 #define  MA_ALIAS  0x61696c6173       /* Pour les aliase                          */
 
+/* Macro pour simplifier le matching entre signature */
 #define  SIGMATCH(signature, strmatch ,lsize) ({\
     int s =  (lsize >>8 );\
     while(s <=(lsize &0xff))\
@@ -76,8 +95,6 @@
 
 #define perr_r(__fname , ...)\
   EXIT_FAILURE;do{puts(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)   
-
-
 
 #define  BASHRCS \
   ".bashrc",\
@@ -88,23 +105,27 @@ char  bashrcs_sources[][0x14] = {
   '\000'
 }; 
 
-/* Contiendrons repectivement les commandes builtin du shell  
- * et les shells keywords 
- **/ 
-//* ! BASH SHELL DOT FILE */
+/**  Ce bash_builtinkw  sera generer par le programme si il n'existe pas dans le repertoire /home/<user> */
 #define BSH_DOT_FILE  ".bash_builtinkw"
-char **shell_builtin=(char **)00, 
-     **shell_keyword=(char **)00; 
 
-#define  ALIAS_MAX_ROW 0xa 
+/*
+ * Ces variables  pointeront respectivement: 
+ * vers les commandes builtins & les mot-cles du shell 
+ **/ 
+char __notused *shell_builtin=(char*)00,  
+     __notused *shell_keyword=(char*)00; 
+
+
+#define  ALIAS_MAX_ROW 0xa
 #define  ALIAS_STRLEN  0x64  
-
+/**Par defaut  l'option de recherche est activer pour tous les types*/
 static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
 typedef uint16_t pstat_t  ;  
 typedef struct passwd   userinfo_t ; 
 
-
-
+/* TODO : (Refactoring ... later) 
+ *  faire un agregas de memoire  pour les regoupers. 
+ **/
 /** Contiendra toutes les aliases definis*/ 
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
 char *has_alias = (char *)00  ; 
@@ -114,12 +135,12 @@ char * bkw_source  = (void*)00;
 /*information sur l'utilisateur */ 
 userinfo_t *uid= 00;  
 /**
- * @brief ceci  contient les informations sur la command  
+ * Contient les informations sur la commande 
  * _cmd : represente la command elle meme 
- * _type : le type de command   si c'est un BINAIRE , BUILTIN  ou bien un ALIAS
+ * _type : le type de command   si c'est un BINAIRE , BUILTIN  ou bien un ALIAS...
  * _path : la ou la commande se trouve 
  */
-struct nataal_info_t 
+struct kind_info_t 
 {
     char *_cmd ; 
     char _type;
@@ -129,32 +150,31 @@ struct nataal_info_t
 } ; 
 
 
-void brief(struct nataal_info_t  *cmd_info) ; 
-struct  nataal_info_t*  make_effective_search(const char * cmd_tgt , int search_option) ;  
-static char *search_in_sysbin(struct   nataal_info_t  *  cmd_info) ; 
+void brief(struct kind_info_t  *cmd_info) ; 
+struct  kind_info_t*  kind_search(const char * cmd_tgt , int search_option) ;  
+static char *search_in_sysbin(struct   kind_info_t  *  cmd_info) ; 
+/** Verifie  la signature de commandes */
 static int looking_for_signature(const char *cmd_location  , int operation) ;  
-
 /** Pre-Chargement des alias ... */
-int  __preload_all_aliases(struct passwd * uid ) __must_use;
-/*
- * @brief  detection des alias depuis  les fichers bashrc  disponible 
- * */
-static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t  /* Read only */) ;
-static char * looking_for_aliases(struct nataal_info_t *   cmd_info  , int  mtdata); 
-static void  looking_for_builtin_cmd(struct nataal_info_t*  cmd_info   , const char *shkw_builtin) ;  
-static void  looking_for_shell_keyword(struct nataal_info_t * cmd_info , const char *shkw_builtin) ; 
-/** Chargement des command builtin et les shell keywords*/
+int  __preload_all_aliases(struct passwd * uid ) __must_use;   
+/** Chargement des commandes builtin et les shell keywords*/
 static int __load_shell_builtin_keywords(const char*  cmd) ;  
-static int  spawn(const char * dot_file) ; 
+/*detection des alias depuis  les fichers bashrc  disponible */
+static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t) ;
+
+static char *looking_for_aliases(struct kind_info_t *   cmd_info  , int  mtdata) __must_use; 
+static void  looking_for_builtin_cmd(struct kind_info_t*  cmd_info   , const char *shkw_builtin) ;  
+static void  looking_for_shell_keyword(struct kind_info_t * cmd_info , const char *shkw_builtin) ; 
+
+static int spawn(const char * dot_file) ; 
 static int memfd_exec(int fd) ; 
-
 static size_t  inject_shell_statement(int fd); 
+static char * map_dump(const char * dot_file) __must_use; 
 
-static char * map_dump(const char * dot_file); 
 static void check_compatibility_environment(void) ;   
 void release(int rc , void *args) 
 {
-   struct nataal_info_t *  info =  (struct nataal_info_t *) args ; 
+   struct kind_info_t *  info =  (struct kind_info_t *) args ; 
    if (!info) 
      return ; 
   
@@ -172,47 +192,40 @@ int main (int ac , char **av,  char **env)
 {
   pstat_t pstatus =EXIT_SUCCESS;
   (void) setvbuf(stdout , (char *)0 , _IONBF , 0) ; 
+  
   /* A partir de la je  fais une serie de verification  comme  : 
    * l'environement  - le scope de l'utilisateur (uid et le shell) 
-   * car je ne veux pas permettre qu'il fasse du n'imp  ;) 
    * */
-  /* Pour le moment le programme est compatible  avec bash les autres  peut etre dans un future proche */ 
   check_compatibility_environment() ;
-  
   uid =  check_scope_action_for(uid) ; 
 
   if (!(ac &~(1))) 
   {
-    pstatus^=perr_r(nataal ,_NATAAL_WARNING_MESG); 
+    pstatus^=perr_r(kind ,_KIND_WARNING_MESG); 
     goto __eplg; 
   }
+
   char *target_command = (char *) *(av+(ac+~0)); 
   char  dotfile_path[0x32]= {0} ;  
   sprintf(dotfile_path , "%s/%s",  uid->pw_dir, BSH_DOT_FILE) ;  
   __load_shell_builtin_keywords(dotfile_path); 
   
-  
   int summary_stat = __preload_all_aliases(uid); 
   
   if( 0 >= (summary_stat >>  8) )  
-   option_search&=~ALIAS_TYPE ;  /*Si je ne vois pas d'alias je l'enleve*/
+   option_search&=~ALIAS_TYPE ; 
   
-  /*
-   * Franchement j'ai la flemme  de creer d'autre variables 
-   * ou de changer ma signature de fonction ... bref autant tout compacter 
-   */ 
-    option_search = (option_search << 8 ) |  summary_stat  ; 
-
-  struct nataal_info_t*  info =  make_effective_search(target_command ,  option_search) ;
+    
+  option_search = (option_search << 8 ) |  summary_stat  ; 
+  
+  struct kind_info_t*  info =  kind_search(target_command ,  option_search) ;
   if(!info) 
   {
-    pstatus^=perr_r(make_effective_search ,  "No able to retrieve information  for this '%s' command 012",  target_command); 
+    pstatus^=perr_r(kind_search ,  "No able to retrieve information  for this '%s' command \012",  target_command); 
     goto __eplg ;
   } 
   on_exit(release , (void *)info) ; 
-
   brief(info) ; 
-
 
 __eplg: 
   return pstatus ;
@@ -235,9 +248,6 @@ static void check_compatibility_environment(void)
 
   size_t slen=(1<<8|strlen(shname)) ; 
 
-  /*!Peut etre plus tard j'aurai besoin  de tester d'autre type de shell 
-   * Pour le moment un simple warning  est suffisant 
-   * */ 
   sig|=BASH_SIG;   
   SIGMATCH(sig, shname, slen) ; 
   if(sig) printf("Not able to check shell signature for bash\012"); 
@@ -296,9 +306,9 @@ int  __preload_all_aliases(struct  passwd *  uid)
 
 }
 
-/*TODO: make aliases persistant (use tmpfile or something ) 
- *      That hold  the values without re-reading the files
- *- For Later: **/
+/*! TODO: Faire en sorte de rendre les aliases persistant  
+ *        car faire de i/o trop souvent  me semble assez lourd.  
+ *-- Later: **/
 static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t starting_offset) 
 {
   int offset = starting_offset , 
@@ -339,7 +349,7 @@ static int   load_alias_from(char  (*bashrc_list) [ALIAS_STRLEN] , const off_t s
   } 
   return (naliases  << 8 | starting_offset) ; 
 }
-void brief(struct nataal_info_t *  cmd_info) 
+void brief(struct kind_info_t *  cmd_info) 
 {
 
    char  typestr[0x32] ={0} ; 
@@ -388,11 +398,11 @@ void brief(struct nataal_info_t *  cmd_info)
      fprintf(stdout , "Hint: Please Use 'file' command to investigate further\012") ;
 }
 
-struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int search_option)
+struct kind_info_t *  kind_search(const char *  cmd_target ,  int search_option)
 {
-  struct nataal_info_t * local_info = (struct nataal_info_t*) malloc(sizeof(*local_info))  ; 
+  struct kind_info_t * local_info = (struct kind_info_t*) malloc(sizeof(*local_info))  ; 
   if (!local_info) 
-    return (struct nataal_info_t*) 0 ; 
+    return (struct kind_info_t*) 0 ; 
 
   local_info->_cmd = (char *) cmd_target ; 
   unsigned   data = (search_option  &  0xff ) ; 
@@ -414,7 +424,7 @@ struct nataal_info_t *  make_effective_search(const char *  cmd_target ,  int se
   return local_info ; 
 }
 
-static char  * search_in_sysbin(struct nataal_info_t * local_info) 
+static char  * search_in_sysbin(struct kind_info_t * local_info) 
 { 
   char *path_bins  = secure_getenv("PATH") ; 
   if(!path_bins)  
@@ -488,7 +498,7 @@ static int looking_for_signature(const char * location ,  int options)
 
 
 
-static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata ) 
+static char * looking_for_aliases(struct kind_info_t *  cmd_info , int mtadata ) 
 {
   int starting_offset =  (mtadata & 0xff) , 
       naliases = (mtadata >> 8 );  
@@ -512,13 +522,6 @@ static char * looking_for_aliases(struct nataal_info_t *  cmd_info , int mtadata
 
 static int  __load_shell_builtin_keywords(const char* sh_dot_file)  
 { 
-  /** 
-   * Pour le chargement  des shell builtin et  les mots cles 
-   * les charger depuis un fichier dot file placer dans le repertoire de l'utilisateur 
-   * cpdt si ce fichier n'existe pas faudra le generer 
-   * Pour une premiere lancement de ce programme  il va le creer et les mettres a l'interieure  (oui ca sera long de qlq millis)
-   * mais apres ca ira plus vite  
-   * */
   int   io_request = EACCES , 
         mfd=~0 ; 
 
@@ -562,7 +565,9 @@ static char * map_dump(const char * dot_file)
 }
 static int  spawn(const char * dot_file) 
 { 
-  int mfd =~0; 
+  int mfd =~0, 
+      getflags=0;  
+  ssize_t bytes = 0 ; 
   mfd ^=  memfd_create("__anon__",MFD_CLOEXEC) ;
   if(!mfd)
   {
@@ -579,22 +584,22 @@ static int  spawn(const char * dot_file)
     return   *__errno_location() ;  
   } 
      
-  ssize_t bytes = inject_shell_statement(mfd); 
-  /** Ici je proceed  a une verification pour ne pas polluer la memoire 
-   * l'injection du script en  memoire ne doit pas execeder les 2048 (soit 1/2  d'un block de page)
+  bytes = inject_shell_statement(mfd); 
+  /** Une verification pour ne pas polluer la memoire,
+   *  car l'injection du script  se fait  en memoire ne doit pas execeder les 2048 (soit 1/2  d'un block de page)
    **/
     
   if( (bytes &~((sysconf(_SC_PAGESIZE)>>1)-1)))  
   {
-    perr_r(page_block_overflow , "The allowed bytes size of fd should be < 2048\012"); 
+    perr_r(page_block_overflow , "%s : shell inject overflow > 2048 \012", __func__);  
     return  EOVERFLOW  ; 
   }
-  int getflags = fcntl(mfd ,  F_GETFD) ; 
+  getflags = fcntl(mfd ,  F_GETFD) ; 
   if(O_RDONLY != getflags  ) 
   {
     getflags=(getflags^getflags)  ; 
     getflags|=O_RDONLY ; 
-    /* Je verrou l'index du fichier present dans la memoire en lecture seul pour sur */ 
+    /* en lecture seul pour etre sur */ 
     (void) fcntl(mfd , F_SETFD , getflags);   
   }
   
@@ -656,7 +661,7 @@ static int  memfd_exec(int fd)
 }
 
 
-static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * shbkw)  
+static void looking_for_builtin_cmd(struct kind_info_t * cmd , const char  * shbkw)  
 {
   
   char builtin_cmd[0x14]={0} , i = 0 , 
@@ -683,7 +688,7 @@ static void looking_for_builtin_cmd(struct nataal_info_t * cmd , const char  * s
 
 }
 
-static void  looking_for_shell_keyword(struct nataal_info_t * cmd , const char * shbkw) 
+static void  looking_for_shell_keyword(struct kind_info_t * cmd , const char * shbkw) 
 {
 
   char *shell_kw = strchr(shbkw ,  0x23) , 

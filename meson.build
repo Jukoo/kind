@@ -1,4 +1,5 @@
-# Copyright(c) 2025  Umar Ba <jUmarB@protonmail.com> e
+# Copyright(c) 2025  Umar Ba <jUmarB@protonmail.com>  
+
 project('kind', 'c',
   version : '0.1',
   license:['GPL-2.O-only', 'GPL-2.0-or-later'],
@@ -19,6 +20,14 @@ add_project_arguments(
     '-Wpedantic'
     ),
   language:'c'
+  )
+
+configure_file(
+  output:'version.h',
+  configuration: {
+    'KIND_VERSION':meson.project_version()
+    }
+
   )
 
 
