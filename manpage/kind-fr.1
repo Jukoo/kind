@@ -1,0 +1,59 @@
+.\" Manpage de kind
+.TH KIND 1 "Septembre 2025" "Version 0.1" 
+.SH NAME
+kind \- alternative moderne à la commande Unix \fBtype\fR
+.SH SYNOPSIS
+.B kind
+\fIcommande\fR
+.SH DESCRIPTION
+\fBkind\fR est un outil en ligne de commande qui permet d'inspecter en détail la nature
+d'une commande Unix. Il fournit des informations structurées et lisibles sur :
+.PP
+\- Le type de la commande (alias, mot-clé du shell, builtin, binaire, script)
+.br
+\- Sa localisation sur le système
+.br
+\- Les alias associés
+.PP
+Cet outil est utile pour comprendre rapidement ce qu'est réellement une commande,
+que ce soit pour le débogage, l'apprentissage ou l'écriture de scripts shell.
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Affiche un message d'aide et quitte.
+.TP
+\fB\-v\fR, \fB\-\-version\fR
+Affiche la version de \fBkind\fR et quitte.
+.SH EXEMPLES
+Inspection de la commande \fIls\fR :
+.PP
+.EX
+$ kind ls
+Command  : ls
+Location : /bin/ls
+Type     : [:binaire:]
+Alias    : alias ls='ls --color=auto'
+.EE
+.PP
+Inspection de la commande \fIldd\fR :
+.PP
+.EX
+$ kind ldd
+command  : ldd
+Location : /usr/bin <is potentially a script>
+Type     : [:script:]
+Hint     : Please use 'file' command to investigate further
+.EE
+.SH LIMITATIONS
+Le comportement peut varier légèrement selon le shell utilisé (zsh, fish, etc.).
+Si plusieurs alias sont chaînés, seul le premier niveau peut être affiché.
+.SH CONFLITS DE NOM
+Le nom \fBkind\fR peut \fIentrer en conflit avec l'outil Kubernetes \fU"kind"\fR\fR
+sur certaines machines.
+.SH AUTEUR
+Écrit par  Umar Ba <jUmarB@protonmail.com> 
+.SH RAPPORT DE BUGS
+Les suggestions ou améliorations sont bienvenues via des issues ou pull requests sur
+le dépôt GitHub : <https://github.com/Jukoo/kind>.
+.SH VOIR AUSSI
+.BR file (1)
