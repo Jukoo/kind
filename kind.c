@@ -64,7 +64,7 @@
 #else  
 # define  pr_dbg(...) /* ne fait rien  ... */ 
 #endif 
-#define _KIND_WARNING_MESG  "A utility to reveal real type of command. An alternative to unix 'type' command\012"
+#define _KIND_WARNING_MESG  "\011A utility to reveal real type of command. An alternative to unix 'type' command\012"
 
 #define  BINARY_TYPE  (1 << 0)  
 #define  BINARY_STR   "binary" 
@@ -171,7 +171,9 @@ static int memfd_exec(int fd) ;
 static size_t  inject_shell_statement(int fd); 
 static char * map_dump(const char * dot_file) __must_use; 
 
-static void check_compatibility_environment(void) ;   
+static void check_compatibility_environment(void) ;  
+static struct passwd * check_scope_action_for(struct passwd * user_id) ;  
+
 void release(int rc , void *args) 
 {
    struct kind_info_t *  info =  (struct kind_info_t *) args ; 
@@ -187,7 +189,21 @@ void release(int rc , void *args)
    if(bkw_source)  
     munmap(bkw_source , dot_file_size), bkw_source= 0; 
 }
-static struct passwd * check_scope_action_for(struct passwd * user_id) ;  
+
+void kind_baseopts(const char * option, char  *const *av) 
+{
+  if(!strcmp(option ,  "--version")  || !(strcmp(option, "-v"))) 
+  {
+    printf("%s\012", KIND_VERSION); 
+    exit(EXIT_SUCCESS)  ;
+  }
+  if(!strcmp(option, "--help") || !(strcmp(option , "-h")))  
+  {
+    printf("Usage : %s : <command>\012For more info see manpage (1)\012",basename(*(av)))    ; 
+    exit(EXIT_SUCCESS);  
+  }
+} 
+
 int main (int ac , char **av,  char **env) 
 {
   pstat_t pstatus =EXIT_SUCCESS;
@@ -205,7 +221,9 @@ int main (int ac , char **av,  char **env)
     goto __eplg; 
   }
 
-  char *target_command = (char *) *(av+(ac+~0)); 
+  char *target_command = (char *) *(av+(ac+~0));
+  kind_baseopts(target_command , av);  
+
   char  dotfile_path[0x32]= {0} ;  
   sprintf(dotfile_path , "%s/%s",  uid->pw_dir, BSH_DOT_FILE) ;  
   __load_shell_builtin_keywords(dotfile_path); 

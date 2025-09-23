@@ -22,13 +22,12 @@ add_project_arguments(
   language:'c'
   )
 
+cfg = configuration_data() 
+cfg.set_quoted('KIND_VERSION', meson.project_version()) 
 configure_file(
   output:'version.h',
-  configuration: {
-    'KIND_VERSION':meson.project_version()
-    }
-
-  )
+  configuration:cfg 
+)
 
 
 ############
