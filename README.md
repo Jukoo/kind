@@ -50,12 +50,17 @@ Aucune dépendance externe.
 
 `kind` va plus loin que la simple commande `type` en offrant un affichage structuré et des indices utiles.
 
-| Commande   | Sortie de `type`            | Sortie de `kind`                                        |
-|------------|-----------------------------|---------------------------------------------------------|
-| `type ldd` | `ldd is /usr/bin/ldd`       |  command : ldd                                          |
-|                                          |  Location : /usr/bin <is potentially a script>          |
-|                                          |  Type : [:script:]                                      |
-|                                          |  Hint : Please use 'file' command to investigate further|
+| Commande   | Sortie de `type`             
+|------------|-----------------------------|
+| `type ldd` | `ldd is /usr/bin/ldd`       | 
+
+
+| Commande   | Sortie de `kind`                                        |
+|------------|----------------------------------------------------------
+| `kind ldd` |  Command:  ldd                                          |
+|            |  Location : /usr/bin <is potentially a script>          |
+|            |  Type : [:script:]                                      |
+|            |  Hint : Please use 'file' command to investigate further|
                                           
 
 #### Ce que ça montre
