@@ -1,11 +1,10 @@
 /** 
- * @file  naatal.c - Pour les plus anglophone  ca sera kind.c   
- * @brief “Naatal lu fi nekk.”
- *         Revele le nature d'une commande 
- * @author Umar Ba <jUmarB@protonmail.com>  
+ * @file   kind.c   
+ * @brief  Une alternative moderne a la command  unix 'type' 
+ * @author Umar Ba <jUmarB@protonmail.com>  2025 
+ * @keyboard-lang : QWERTY  
  * @warning :  Ce programme est compatible avec bash car ce dernier a ete develope sous cet environement.
- * Je ne connais pas le comportement exacte  avec les autres shell (csh , fish , nushell, elvish ...)
- * Veuillez investiguer la dessus . 
+ * le comportement peut varier legerement  selon le shell utilise  (csh,zsh, fish , nushell, elvish ...).
  * NOTE: Ce programme  peut servir de reference si vous voulez faire votre propre implementation
  */
 
@@ -45,7 +44,7 @@
 # define pr_dbg(...) \
   do{ printf("%s :",__func__); fprintf(stdout ,__VA_ARGS__);} while(0) 
 #else  
-# define  pr_dbg(...) /* ne fait rien du tout */ 
+# define  pr_dbg(...) /* ne fait rien  ... */ 
 #endif 
 #define _NATAAL_WARNING_MESG  "A utility to reveal real type of command \012"
 
@@ -56,18 +55,18 @@
 #define  ALIAS_TYPE   (1 << 2)
 #define  ALIAS_STR    "alias" 
 #define  SHELL_KW_TYPE (1<< 3) 
-#define  SHELL_KW_STR  "Shell keyword"  
-/* Et oui , parfois certains command sont dans /usr/bin et ce sont bien des scripts */
+#define  SHELL_KW_STR  "Shell keyword" 
+/*Il se peut que parfois certains commandes se trouvant dans /usr/bin soient de scripts */
 #define  SCRIPT_TYPE (1<<4) 
 #define  SCRIPT_STR "script"  
 
 #define  TYPE_STR(__type) \
    __type##_STR
 
-#define  SHEBANG   0x212300  /* Pour la detection des scripts potentiel  */ 
-#define  BASH_SIG  0x73616268 
-#define  ELF_SIG   0x4c457f46  
-#define  MA_ALIAS  0x61696c6173 
+#define  SHEBANG   0x212300           /* Pour la detection des scripts potentiel  */ 
+#define  BASH_SIG  0x73616268         /* Signature pour Bash                      */
+#define  ELF_SIG   0x4c457f46         /* Signature pour le executables            */
+#define  MA_ALIAS  0x61696c6173       /* Pour les aliase                          */
 
 #define  SIGMATCH(signature, strmatch ,lsize) ({\
     int s =  (lsize >>8 );\
@@ -79,16 +78,10 @@
   EXIT_FAILURE;do{puts(#__fname);fprintf(stderr , __VA_ARGS__); }while(0)   
 
 
-/* Tous les 'dot file' .x vont etre considere  comme des fichiers  qui sont 
- * dans le repertoire de l'utilisateur courrant 
- **/
+
 #define  BASHRCS \
   ".bashrc",\
   "/etc/bash/bashrc"  /**Vous pouvez ajouter d'autres sources si vous voulez*/ 
-
-static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
-typedef uint16_t pstat_t  ;  
-typedef struct passwd   userinfo_t ; 
 
 char  bashrcs_sources[][0x14] = {
   BASHRCS,
@@ -105,6 +98,13 @@ char **shell_builtin=(char **)00,
 
 #define  ALIAS_MAX_ROW 0xa 
 #define  ALIAS_STRLEN  0x64  
+
+static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
+typedef uint16_t pstat_t  ;  
+typedef struct passwd   userinfo_t ; 
+
+
+
 /** Contiendra toutes les aliases definis*/ 
 char bash_aliases[ALIAS_MAX_ROW][ALIAS_STRLEN]= {0} ; 
 char *has_alias = (char *)00  ; 
