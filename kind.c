@@ -266,7 +266,7 @@ static struct passwd * check_scope_action_for(struct passwd * user_id)
   user_id = getpwnam(username) ; 
   if(!user_id ) 
   {
-    perr_r(check_scope_action_for , "%i  due to  :%s\012", *__errno_location())  ;
+    perr_r(check_scope_action_for , "cause error due to  :%s\012", *__errno_location())  ;
     exit(EXIT_FAILURE)  ; 
   }
   
