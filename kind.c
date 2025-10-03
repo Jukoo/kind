@@ -66,17 +66,20 @@
 #endif 
 #define _KIND_WARNING_MESG  "\011A utility to reveal real type of command. An alternative to unix 'type' command\012"
 
-#define  BINARY_TYPE  (1 << 0)  
-#define  BINARY_STR   "binary" 
-#define  BUILTIN_TYPE (1 << 1)
-#define  BUILTIN_STR  "builtin" 
-#define  ALIAS_TYPE   (1 << 2)
-#define  ALIAS_STR    "alias" 
-#define  SHELL_KW_TYPE (1<< 3) 
-#define  SHELL_KW_STR  "Shell keyword" 
+
+#define  BINARY_TYPE   (1 << 0)  
+#define  BUILTIN_TYPE  (1 << 1)
+#define  ALIAS_TYPE    (1 << 2)
+#define  SHELL_KW_TYPE (1 << 3)  
 /*Il se peut que parfois certains commandes se trouvant dans /usr/bin soient de scripts */
-#define  SCRIPT_TYPE (1<<4) 
-#define  SCRIPT_STR "script"  
+#define  SCRIPT_TYPE   (1 << 4)  
+
+#define  BINARY_STR    "binary" 
+#define  BUILTIN_STR   "builtin" 
+#define  SCRIPT_STR    "script"  
+#define  ALIAS_STR     "alias" 
+#define  SHELL_KW_STR  "Shell keyword" 
+
 
 #define  TYPE_STR(__type) \
    __type##_STR
@@ -108,18 +111,10 @@ char  bashrcs_sources[][0x14] = {
 /**  Ce bash_builtinkw  sera generer par le programme si il n'existe pas dans le repertoire /home/<user> */
 #define BSH_DOT_FILE  ".bash_builtinkw"
 
-/*
- * Ces variables  pointeront respectivement: 
- * vers les commandes builtins & les mot-cles du shell 
- **/ 
-char __notused *shell_builtin=(char*)00,  
-     __notused *shell_keyword=(char*)00; 
-
-
 #define  ALIAS_MAX_ROW 0xa
 #define  ALIAS_STRLEN  0x64  
 /**Par defaut  l'option de recherche est activer pour tous les types*/
-static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  ;  
+static unsigned int option_search= BINARY_TYPE|ALIAS_TYPE|BUILTIN_TYPE| SHELL_KW_TYPE  | SCRIPT_TYPE ;  
 typedef uint16_t pstat_t  ;  
 typedef struct passwd   userinfo_t ; 
 
@@ -133,7 +128,28 @@ size_t dot_file_size  = 0 ;
 extern char ** environ ;
 char * bkw_source  = (void*)00; 
 /*information sur l'utilisateur */ 
-userinfo_t *uid= 00;  
+userinfo_t *uid= 00;   
+
+struct dotfile_info_t  { 
+  ssize_t   df_size ; 
+  char *df_source ; 
+}; 
+typedef struct shell_bltkw_t shbk_t  ; 
+struct shell_bltkw_t { 
+  struct dotfile_info_t  *df_info ;  
+  /*
+   * Ces variables  pointeront respectivement: 
+   * vers les commandes builtins & les mot-cles du shell 
+   **/ 
+  char * shell_builtins; 
+  char * shell_keywords;  
+}; 
+
+/* Ici  je fais un  type dite  'incomplet' 
+ * qui est dans le scope global  et sert de masquage a mes structure de donnees  
+ * */
+struct sh_t* sh_t; /* Incomplet */ 
+
 /**
  * Contient les informations sur la commande 
  * _cmd : represente la command elle meme 
@@ -158,13 +174,13 @@ static int looking_for_signature(const char *cmd_location  , int operation) ;
 /** Pre-Chargement des alias ... */
 int  __preload_all_aliases(struct passwd * uid ) __must_use;   
 /** Chargement des commandes builtin et les shell keywords*/
-static int __load_shell_builtin_keywords(const char*  cmd) ;  
+static struct  shell_bltkw_t * __load_shell_builtin_keywords(const char*  cmd) ;  
 /*detection des alias depuis  les fichers bashrc  disponible */
 static int load_alias_from(char (*)[ALIAS_STRLEN] , const off_t) ;
 
 static char *looking_for_aliases(struct kind_info_t *   cmd_info  , int  mtdata) __must_use; 
-static void  looking_for_builtin_cmd(struct kind_info_t*  cmd_info   , const char *shkw_builtin) ;  
-static void  looking_for_shell_keyword(struct kind_info_t * cmd_info , const char *shkw_builtin) ; 
+static void  looking_for_builtin_cmd(struct kind_info_t*  __restrict__  cmd_info) ; 
+static void  looking_for_shell_keyword(struct kind_info_t* __restrict__ cmd_info) ; 
 
 static int spawn(const char * dot_file) ; 
 static int memfd_exec(int fd) ; 
@@ -226,13 +242,12 @@ int main (int ac , char **av,  char **env)
 
   char  dotfile_path[0x32]= {0} ;  
   sprintf(dotfile_path , "%s/%s",  uid->pw_dir, BSH_DOT_FILE) ;  
-  __load_shell_builtin_keywords(dotfile_path); 
+  sh_t =(struct  sh_t  *)__load_shell_builtin_keywords(dotfile_path); 
   
   int summary_stat = __preload_all_aliases(uid); 
   
   if( 0 >= (summary_stat >>  8) )  
    option_search&=~ALIAS_TYPE ; 
-  
     
   option_search = (option_search << 8 ) |  summary_stat  ; 
   
@@ -422,7 +437,9 @@ struct kind_info_t *  kind_search(const char *  cmd_target ,  int search_option)
   if (!local_info) 
     return (struct kind_info_t*) 0 ; 
 
-  local_info->_cmd = (char *) cmd_target ; 
+  memset(local_info  ,  00 , sizeof(*local_info)) ;  
+
+  local_info->_cmd = (char *) cmd_target ;  
   unsigned   data = (search_option  &  0xff ) ; 
   search_option  >>=8 ;  
   
@@ -433,13 +450,12 @@ struct kind_info_t *  kind_search(const char *  cmd_target ,  int search_option)
     (void *)search_in_sysbin(local_info);  
   
   if(search_option  &  BUILTIN_TYPE) 
-     looking_for_builtin_cmd(local_info  , bkw_source) ;  
+     looking_for_builtin_cmd(local_info) ;  
   
   if(search_option & SHELL_KW_TYPE)  
-     /** TODO : FOR SHELL KEY WORDS  */  
-    looking_for_shell_keyword(local_info , bkw_source) ;  
-  
-  return local_info ; 
+    looking_for_shell_keyword(local_info) ; 
+
+ return local_info ; 
 }
 
 static char  * search_in_sysbin(struct kind_info_t * local_info) 
@@ -468,7 +484,7 @@ static char  * search_in_sysbin(struct kind_info_t * local_info)
     break ; 
   } 
   
-  local_info->_path = token ? strdup(token) :(char *)00 ; 
+  local_info->_path = token ? strdup(token) :(char *)00 ;
   local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
 
   return   (char *) local_info ;  
@@ -496,22 +512,25 @@ static int looking_for_signature(const char * location ,  int options)
   {
     while( size <=4  ) 
       elf_check|=  *(elf_header_sig +size-1) << (8*size), size=-~size;   
-    
-    flags  = !(elf_check^ELF_SIG) ? BINARY_TYPE : 0 ; 
+  
+
+    if(!(elf_check^ ELF_SIG))  
+      return  BINARY_TYPE ;
   } 
   
-  if(options & SCRIPT_TYPE && !flags) 
+  if(options & SCRIPT_TYPE) 
   { 
     elf_check&=~elf_check, size=1;   
-    /*TODO : Detection si  la command est un potantiel script */ 
+    /*NOTE : Detection si  la command est un potantiel script */ 
     while(size <=2  ) 
       elf_check|= *(elf_header_sig+ (size-1))  <<(8*size), size=-~size ;  
-    
-    flags = !(elf_check ^ SHEBANG)  ? SCRIPT_TYPE : 0 ; 
-
+   
+    if(!(elf_check^SHEBANG)) 
+      return SCRIPT_TYPE ; 
+     
   }
 
-  return flags ;  
+  return 0;   
 }
 
 
@@ -538,8 +557,13 @@ static char * looking_for_aliases(struct kind_info_t *  cmd_info , int mtadata )
 }
 
 
-static int  __load_shell_builtin_keywords(const char* sh_dot_file)  
+static  struct shell_bltkw_t * __load_shell_builtin_keywords(const char* sh_dot_file)  
 { 
+
+  struct shell_bltkw_t * shell_bkw = (struct shell_bltkw_t *) malloc(sizeof(*shell_bkw))  ;  
+  if(!shell_bkw) 
+    return(struct  shell_bltkw_t*) 00; 
+  
   int   io_request = EACCES , 
         mfd=~0 ; 
 
@@ -552,34 +576,55 @@ static int  __load_shell_builtin_keywords(const char* sh_dot_file)
      {
         perr_r(spawn, "Not able to create  %s \012", BSH_DOT_FILE) ; 
         option_search &=~SHELL_KW_TYPE ; 
-        return EPERM; 
+        free(shell_bkw ) ; 
+        return (void *) 0 ; 
      } 
      io_request|=EACCES;    
   }
 
-  bkw_source=map_dump(sh_dot_file);   
- 
-  return 0 ; 
+  shell_bkw->df_info = (struct dotfile_info_t*)  map_dump(sh_dot_file); 
+  if(!shell_bkw->df_info) 
+  {
+    option_search &=~SHELL_KW_TYPE ; 
+    return (struct  shell_bltkw_t *) 00 ;  
+  }
+
+  char *hash_mark  = strchr(shell_bkw->df_info->df_source , 0x23) ;  
+  if(!hash_mark) 
+  {
+    option_search &=~SHELL_KW_TYPE; 
+    return (struct shell_bltkw_t*) 00 ; 
+  }  
+
+  ssize_t  offsize = (hash_mark - shell_bkw->df_info->df_source);  
+
+  shell_bkw->shell_builtins =  strndup(shell_bkw->df_info->df_source, offsize+1) ; 
+  shell_bkw->shell_keywords = hash_mark ; 
+
+  return shell_bkw ; 
 }
 
 static char * map_dump(const char * dot_file) 
 { 
-
-   int fd =  ~0 ; 
-   fd^=open(dot_file , O_RDONLY) ; 
+   struct  dotfile_info_t *  dfinfo  = (struct dotfile_info_t*) malloc(sizeof(*dfinfo)) ; 
+   if(!dfinfo) 
+     return  (char *) 0  ; 
+  
+   struct stat  sb ; 
+   int fd= (~0 ^open(dot_file , O_RDONLY) ) ; 
    if(!fd) 
      return (void *)0 ;
    
    fd=~fd  ; 
-   struct stat  sb ; 
    fstat(fd , &sb);  
-   dot_file_size  =  sb.st_size  ; 
-   bkw_source = (char *)mmap((void *)0 ,sb.st_size , PROT_READ , MAP_PRIVATE , fd , 0) ; 
+   dfinfo->df_size =  sb.st_size  ; 
+   dfinfo->df_source = (char *)mmap((void *)0 ,dfinfo->df_size, PROT_READ , MAP_PRIVATE , fd , 0) ; 
    close(fd) ; 
-   if (MAP_FAILED ==   bkw_source) 
+   if (MAP_FAILED ==   (dfinfo->df_source)) 
      return (void *)0 ;  
 
-   return  bkw_source ;  
+  
+   return  (char *) dfinfo ; 
 }
 static int  spawn(const char * dot_file) 
 { 
@@ -678,62 +723,47 @@ static int  memfd_exec(int fd)
    return  ~0 ;  
 }
 
-
-static void looking_for_builtin_cmd(struct kind_info_t * cmd , const char  * shbkw)  
+static void looking_for_builtin_cmd(struct kind_info_t  *restrict  cmd )  
 {
+   char  bltw[0x14] ={0};
+   size_t offsize = 0 ; 
+   struct  shell_bltkw_t * shbkw = (struct shell_bltkw_t*)  sh_t ;  
   
-  char builtin_cmd[0x14]={0} , i = 0 , 
-       *builtins  = (char *) shbkw ;   
- 
-  while ( ((*builtins & 0xff) !=  0x23))
-  {
-     char *linefeed  = strchr(builtins, 0xa);  
-     if (linefeed) 
-        i =  linefeed -  builtins;
-     
-     memcpy(builtin_cmd ,   builtins ,  i ) ; 
-
-     if(!strcmp(cmd->_cmd , builtin_cmd))
+   while( (*shbkw->shell_builtins & 0xff )  ^ 0x23) 
+   {
+     char *lf = strchr(shbkw->shell_builtins , 0xa) ; 
+     offsize =  lf -  shbkw->shell_builtins ; 
+     memcpy(bltw , shbkw->shell_builtins ,  offsize) ;  
+     if(!strcmp(cmd->_cmd , bltw)) 
      {
-       cmd->_type|=BUILTIN_TYPE ; 
-       return ;  
-     }
-      
-     builtins = (builtins+(i+1)) ;   
-     bzero(builtin_cmd  , i ) ; 
-  }
- 
-
-}
-
-static void  looking_for_shell_keyword(struct kind_info_t * cmd , const char * shbkw) 
-{
-
-  char *shell_kw = strchr(shbkw ,  0x23) , 
-       kword[0x14] = {0} ; 
-  if(!shell_kw) 
-  {
-     option_search&=~SHELL_KW_TYPE ;  
-     return ; 
-  }
-  shell_kw=(shell_kw+2) ; 
-  int index_jmp  = 0 ;   
- 
-  while( (0x30^ (*(shell_kw) & 0xff ))) 
-  {
-    char *lf = strchr(shell_kw  ,012)  ; 
-    if(!lf) 
-      break ; 
-    
-    index_jmp = (lf - shell_kw) ;
-    memcpy(kword ,  shell_kw , index_jmp) ; 
-    
-    if(!strcmp(cmd->_cmd, kword)) 
-    {
-       cmd->_type|=SHELL_KW_TYPE ; 
+       cmd->_type|=BUILTIN_TYPE ;  
        return ; 
-    }
-    bzero(kword , 0x14);
-    shell_kw =(shell_kw+(index_jmp+1)) ; 
-  }
-}
+     }
+     shbkw->shell_builtins=(shbkw->shell_builtins+(++offsize)) ; 
+     bzero(bltw, 0x14) ; 
+   }
+} 
+
+static void  looking_for_shell_keyword(struct kind_info_t * restrict  cmd) 
+{
+   struct shell_bltkw_t  * shbkw  = (struct shell_bltkw_t *) sh_t  ; 
+   
+   ssize_t offsize = 0 ; 
+   char   shkw[0x14] = {0}; 
+   while((*shbkw->shell_keywords & 0xff)!= 0) 
+   {
+     char *lf = strchr(shbkw->shell_keywords , 0xa ) ; 
+     offsize = (lf - shbkw->shell_keywords); 
+    
+     memcpy(shkw , shbkw->shell_keywords ,  offsize) ; 
+     if(!strcmp(shkw , cmd->_cmd)) 
+     {
+       cmd->_type |=SHELL_KW_TYPE ;  
+       return ; 
+     }
+    
+     shbkw->shell_keywords = (shbkw->shell_keywords + (++offsize)) ;  
+     bzero(shkw,  0x14) ;  
+
+   }
+} 
