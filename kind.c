@@ -162,9 +162,10 @@ struct kind_info_t
     char _type;
     union {
       char * _path ; 
-    } ; 
+    } ;  
 } ; 
 
+   
 
 void brief(struct kind_info_t  *cmd_info) ; 
 struct  kind_info_t*  kind_search(const char * cmd_tgt , int search_option) ;  
@@ -195,15 +196,25 @@ void release(int rc , void *args)
    struct kind_info_t *  info =  (struct kind_info_t *) args ; 
    if (!info) 
      return ; 
-  
+
    if(info->_path) 
      free(info->_path) ; 
   
    free(info) ; 
-   info = 0  ; 
+   info = 00;  
+
+   struct  shell_bltkw_t*  shinfo  = (struct shell_bltkw_t *) sh_t ;
   
-   if(bkw_source)  
-    munmap(bkw_source , dot_file_size), bkw_source= 0; 
+   if(shinfo->df_info->df_source)  
+      munmap(shinfo->df_info->df_source, shinfo->df_info->df_size );  
+ 
+   free(shinfo->df_info),shinfo->df_info = 00; 
+  
+   if(shinfo->shell_builtins)  
+     free(shinfo->shell_builtins), shinfo->shell_builtins=00; 
+
+   free(shinfo),shinfo =  00 ; 
+   
 }
 
 void kind_baseopts(const char * option, char  *const *av) 
@@ -257,6 +268,7 @@ int main (int ac , char **av,  char **env)
     pstatus^=perr_r(kind_search ,  "No able to retrieve information  for this '%s' command \012",  target_command); 
     goto __eplg ;
   } 
+
   on_exit(release , (void *)info) ; 
   brief(info) ; 
 
@@ -459,18 +471,22 @@ struct kind_info_t *  kind_search(const char *  cmd_target ,  int search_option)
 }
 
 static char  * search_in_sysbin(struct kind_info_t * local_info) 
-{ 
+{
+  if(!((*local_info->_cmd  & 0xff)  ^ 0x2e) && strlen(local_info->_cmd) == 1 ) 
+    return   (char *) local_info ; 
+  
   char *path_bins  = secure_getenv("PATH") ; 
   if(!path_bins)  
     return (void *) 0  ;   
   
   char *token =  (char *) 0 , 
        location[0x64] ={0} ,
-       typeflag = 0 ;  
+       found = 0 ;  
   
   while((char  *)0 != (token = strtok(path_bins , (const char[]){0x3a , 00})) ) 
   {  
-    path_bins= 0; 
+    if(path_bins)
+      path_bins= 0; 
     //! les noms de chemin trop long ne seront pas considerer  
     if (!(0x64^strlen(token)))  
       continue ; 
@@ -481,9 +497,9 @@ static char  * search_in_sysbin(struct kind_info_t * local_info)
        bzero(location, 0x64) ; 
        continue ; 
     } 
-    break ; 
+    break ;  
   } 
-  
+    
   local_info->_path = token ? strdup(token) :(char *)00 ;
   local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
 
@@ -598,7 +614,7 @@ static  struct shell_bltkw_t * __load_shell_builtin_keywords(const char* sh_dot_
 
   ssize_t  offsize = (hash_mark - shell_bkw->df_info->df_source);  
 
-  shell_bkw->shell_builtins =  strndup(shell_bkw->df_info->df_source, offsize+1) ; 
+  shell_bkw->shell_builtins =(char *) strndup(shell_bkw->df_info->df_source, offsize+1) ; 
   shell_bkw->shell_keywords = hash_mark ; 
 
   return shell_bkw ; 
@@ -728,7 +744,8 @@ static void looking_for_builtin_cmd(struct kind_info_t  *restrict  cmd )
    char  bltw[0x14] ={0};
    size_t offsize = 0 ; 
    struct  shell_bltkw_t * shbkw = (struct shell_bltkw_t*)  sh_t ;  
-  
+   char  * copy = shbkw->shell_builtins;   
+
    while( (*shbkw->shell_builtins & 0xff )  ^ 0x23) 
    {
      char *lf = strchr(shbkw->shell_builtins , 0xa) ; 
@@ -737,19 +754,24 @@ static void looking_for_builtin_cmd(struct kind_info_t  *restrict  cmd )
      if(!strcmp(cmd->_cmd , bltw)) 
      {
        cmd->_type|=BUILTIN_TYPE ;  
-       return ; 
+       break;  
      }
      shbkw->shell_builtins=(shbkw->shell_builtins+(++offsize)) ; 
      bzero(bltw, 0x14) ; 
-   }
+   } 
+   
+   /*  Restauration de l'address */   
+   shbkw->shell_builtins = copy ;  
+
 } 
 
 static void  looking_for_shell_keyword(struct kind_info_t * restrict  cmd) 
 {
    struct shell_bltkw_t  * shbkw  = (struct shell_bltkw_t *) sh_t  ; 
-   
+  
    ssize_t offsize = 0 ; 
-   char   shkw[0x14] = {0}; 
+   char   shkw[0x14] = {0}, 
+          *copy =   shbkw->shell_keywords ; 
    while((*shbkw->shell_keywords & 0xff)!= 0) 
    {
      char *lf = strchr(shbkw->shell_keywords , 0xa ) ; 
@@ -759,11 +781,13 @@ static void  looking_for_shell_keyword(struct kind_info_t * restrict  cmd)
      if(!strcmp(shkw , cmd->_cmd)) 
      {
        cmd->_type |=SHELL_KW_TYPE ;  
-       return ; 
+       break ; 
      }
     
      shbkw->shell_keywords = (shbkw->shell_keywords + (++offsize)) ;  
      bzero(shkw,  0x14) ;  
-
    }
+
+    /*Restauration de l'address */ 
+   shbkw->shell_keywords = copy ; 
 } 
