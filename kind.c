@@ -471,18 +471,22 @@ struct kind_info_t *  kind_search(const char *  cmd_target ,  int search_option)
 }
 
 static char  * search_in_sysbin(struct kind_info_t * local_info) 
-{ 
+{
+  if(!((*local_info->_cmd  & 0xff)  ^ 0x2e) && strlen(local_info->_cmd) == 1 ) 
+    return   (char *) local_info ; 
+  
   char *path_bins  = secure_getenv("PATH") ; 
   if(!path_bins)  
     return (void *) 0  ;   
   
   char *token =  (char *) 0 , 
        location[0x64] ={0} ,
-       typeflag = 0 ;  
+       found = 0 ;  
   
   while((char  *)0 != (token = strtok(path_bins , (const char[]){0x3a , 00})) ) 
   {  
-    path_bins= 0; 
+    if(path_bins)
+      path_bins= 0; 
     //! les noms de chemin trop long ne seront pas considerer  
     if (!(0x64^strlen(token)))  
       continue ; 
@@ -493,9 +497,9 @@ static char  * search_in_sysbin(struct kind_info_t * local_info)
        bzero(location, 0x64) ; 
        continue ; 
     } 
-    break ; 
+    break ;  
   } 
-  
+    
   local_info->_path = token ? strdup(token) :(char *)00 ;
   local_info->_type|= looking_for_signature(location, BINARY_TYPE | SCRIPT_TYPE) ; 
 
